@@ -14,7 +14,7 @@ endif
 CCOPT= $(CFLAGS) $(CCLINK) $(ARCH) $(PROF)
 DEBUG?= -g -rdynamic -ggdb 
 
-LOADOBJ = ae.o anet.o redis-load.o sds.o adlist.o zmalloc.o
+LOADOBJ = ae.o anet.o redis-load.o sds.o adlist.o zmalloc.o rc4rand.o
 
 LOADPRGNAME = redis-load
 
@@ -27,16 +27,9 @@ ae_epoll.o: ae_epoll.c
 ae_kqueue.o: ae_kqueue.c
 ae_select.o: ae_select.c
 anet.o: anet.c fmacros.h anet.h
-dict.o: dict.c fmacros.h dict.h zmalloc.h
-lzf_c.o: lzf_c.c lzfP.h
-lzf_d.o: lzf_d.c lzfP.h
-pqsort.o: pqsort.c
-redis-benchmark.o: redis-benchmark.c fmacros.h ae.h anet.h sds.h adlist.h \
-  zmalloc.h
-redis-cli.o: redis-cli.c fmacros.h anet.h sds.h adlist.h zmalloc.h
-redis-load.o: redis-load.c fmacros.h ae.h anet.h sds.h adlist.h zmalloc.h
-redis.o: redis.c fmacros.h config.h redis.h ae.h sds.h anet.h dict.h \
-  adlist.h zmalloc.h lzf.h pqsort.h staticsymbols.h
+rc4rand.o: rc4rand.c
+redis-load.o: redis-load.c fmacros.h ae.h anet.h sds.h adlist.h zmalloc.h \
+  rc4rand.h
 sds.o: sds.c sds.h zmalloc.h
 zmalloc.o: zmalloc.c config.h
 

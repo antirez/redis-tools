@@ -25,11 +25,16 @@
 #include "sds.h"
 #include "adlist.h"
 #include "zmalloc.h"
+#include "rc4rand.h"
 
 #define REPLY_INT 0
 #define REPLY_RETCODE 1
 #define REPLY_BULK 2
 #define REPLY_MBULK 3
+
+#define REDIS_IDLE 0
+#define REDIS_GET 1
+#define REDIS_SET 2
 
 #define CLIENT_CONNECTING 0
 #define CLIENT_SENDQUERY 1
@@ -69,6 +74,7 @@ static struct config {
 typedef struct _client {
     int state;
     int fd;
+    int reqtype;        /* request type. REDIS_GET, REDIS_SET, ... */
     sds obuf;
     sds ibuf;
     int mbulk;          /* Number of elements in an mbulk reply */
@@ -77,6 +83,7 @@ typedef struct _client {
     unsigned int written;        /* bytes of 'obuf' already written */
     int replytype;
     long long start;    /* start time in milliseconds */
+    long keyid;          /* the key name for this request is "key:<keyid>" */
 } *client;
 
 /* Prototypes */
@@ -92,6 +99,11 @@ static long long mstime(void) {
     mst = ((long)tv.tv_sec)*1000;
     mst += tv.tv_usec/1000;
     return mst;
+}
+
+/* Return a pseudo random number between min and max both inclusive */
+static long randbetween(long min, long max) {
+    return min+(random()%(max-min+1));
 }
 
 static void freeClient(client c) {
@@ -116,6 +128,40 @@ static void freeAllClients(void) {
         next = ln->next;
         freeClient(ln->value);
         ln = next;
+    }
+}
+
+static void checkDataIntegrity(client c) {
+    if (c->reqtype == REDIS_GET) {
+        size_t l;
+        unsigned char *data;
+        unsigned long datalen;
+
+        l = sdslen(c->ibuf);
+        if ((l == 5 || l == 3) &&
+            c->ibuf[0] == '$' && c->ibuf[1] == '-' && c->ibuf[2] == '1')
+            return;
+
+        rc4rand_seed(c->keyid);
+        datalen = rc4rand_between(config.datasize_min,config.datasize_max);
+        data = zmalloc(datalen+3);
+        rc4rand_set(data,datalen);
+        data[datalen] = '\r';
+        data[datalen+1] = '\n';
+        data[datalen+2] = '\0';
+
+        if (l && l-2 != datalen) {
+            printf("*** Len mismatch for KEY key:%ld\n", c->keyid);
+            printf("*** %lu instead of %lu\n", l, datalen);
+            printf("*** '%s' instead of '%s'\n", c->ibuf, data);
+            exit(1);
+        }
+        if (memcmp(data,c->ibuf,datalen) != 0) {
+            printf("*** Data mismatch for KEY key:%ld\n", c->keyid);
+            printf("*** '%s' instead of '%s'\n", c->ibuf, data);
+            exit(1);
+        }
+        zfree(data);
     }
 }
 
@@ -153,21 +199,40 @@ static void prepareClientForQuery(client c) {
     long key = random() % config.keyspace;
 
     sdsfree(c->obuf);
+    c->keyid = key;
     if (config.idlemode) {
+        c->reqtype = REDIS_IDLE;
         c->obuf = sdsempty();
     } else if (r < config.writes_perc) {
-        char *data;
+        unsigned char *data;
+        unsigned long datalen;
+        
         /* Write */
-        data = zmalloc(config.datasize_min+2);
-        c->obuf = sdscatprintf(sdsempty(),"SET key:%ld %d\r\n",key,config.datasize_min);
-        memset(data,'x',config.datasize_min);
-        data[config.datasize_min] = '\r';
-        data[config.datasize_min+1] = '\n';
-        c->obuf = sdscatlen(c->obuf,data,config.datasize_min+2);
+        c->reqtype = REDIS_SET;
+        if (config.check) {
+            rc4rand_seed(key);
+            datalen = rc4rand_between(config.datasize_min,config.datasize_max);
+        } else {
+            datalen = randbetween(config.datasize_min,config.datasize_max);
+        }
+        data = zmalloc(datalen+2);
+        c->obuf = sdscatprintf(sdsempty(),"SET key:%ld %lu\r\n",key,datalen);
+        /* We use the key number as seed of the PRNG, so we'll be able to
+         * check if a given key contains the right data later, without the
+         * use of additional memory */
+        if (config.check) {
+            rc4rand_set(data,datalen);
+        } else {
+            memset(data,'x',datalen);
+        }
+        data[datalen] = '\r';
+        data[datalen+1] = '\n';
+        c->obuf = sdscatlen(c->obuf,data,datalen+2);
         c->replytype = REPLY_RETCODE;
         zfree(data);
     } else {
         /* Read */
+        c->reqtype = REDIS_GET;
         c->obuf = sdscatprintf(sdsempty(),"GET key:%ld\r\n",key);
         c->replytype = REPLY_BULK;
     }
@@ -181,6 +246,8 @@ static void clientDone(client c) {
     latency = mstime() - c->start;
     if (latency > MAX_LATENCY) latency = MAX_LATENCY;
     config.latency[latency]++;
+
+    if (config.check) checkDataIntegrity(c);
 
     if (config.debug && last_tot_received != c->totreceived) {
         printf("Tot bytes received: %d\n", c->totreceived);
@@ -247,7 +314,6 @@ processdata:
                 *p = '\0';
                 *(p-1) = '\0';
                 c->readlen = atoi(c->ibuf+1)+2;
-                // printf("BULK ATOI: %s\n", c->ibuf+1);
                 /* Handle null bulk reply "$-1" */
                 if (c->readlen-2 == -1) {
                     clientDone(c);
@@ -273,6 +339,7 @@ processdata:
                 c->ibuf = sdsrange(c->ibuf,(p-c->ibuf)+1,-1);
                 goto processdata;
             } else {
+                if (c->reqtype == REDIS_GET) {printf("HERE! %d %s\n",c->replytype,c->ibuf); exit(1);}
                 c->ibuf = sdstrim(c->ibuf,"\r\n");
                 clientDone(c);
                 return;
@@ -346,6 +413,7 @@ static client createClient(void) {
     c->written = 0;
     c->totreceived = 0;
     c->state = CLIENT_CONNECTING;
+    c->reqtype = REDIS_IDLE;
     aeCreateFileEvent(config.el, c->fd, AE_WRITABLE, writeHandler, c);
     config.liveclients++;
     listAddNodeTail(config.clients,c);
@@ -472,6 +540,8 @@ void parseOptions(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i],"quiet")) {
             config.quiet = 1;
+        } else if (!strcmp(argv[i],"check")) {
+            config.check = 1;
         } else if (!strcmp(argv[i],"loop")) {
             config.loop = 1;
         } else if (!strcmp(argv[i],"debug")) {
