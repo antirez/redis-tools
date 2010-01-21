@@ -88,7 +88,7 @@ typedef struct _client {
 
 /* Prototypes */
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask);
-static void createMissingClients(client c);
+static void createMissingClients(void);
 
 /* Implementation */
 static long long mstime(void) {
@@ -138,7 +138,7 @@ static void checkDataIntegrity(client c) {
         unsigned long datalen;
 
         l = sdslen(c->ibuf);
-        if ((l == 5 || l == 3) &&
+        if (l == 5 &&
             c->ibuf[0] == '$' && c->ibuf[1] == '-' && c->ibuf[2] == '1')
             return;
 
@@ -177,7 +177,7 @@ static void resetClient(client c) {
     c->totreceived = 0;
     c->state = CLIENT_SENDQUERY;
     c->start = mstime();
-    createMissingClients(c);
+    createMissingClients();
 }
 
 static void prepareClientForReply(client c, int type) {
@@ -264,7 +264,7 @@ static void clientDone(client c) {
         prepareClientForReply(c,c->replytype);
     } else {
         config.liveclients--;
-        createMissingClients(c);
+        createMissingClients();
         config.liveclients++;
         freeClient(c);
     }
@@ -339,7 +339,6 @@ processdata:
                 c->ibuf = sdsrange(c->ibuf,(p-c->ibuf)+1,-1);
                 goto processdata;
             } else {
-                if (c->reqtype == REDIS_GET) {printf("HERE! %d %s\n",c->replytype,c->ibuf); exit(1);}
                 c->ibuf = sdstrim(c->ibuf,"\r\n");
                 clientDone(c);
                 return;
@@ -420,12 +419,12 @@ static client createClient(void) {
     return c;
 }
 
-static void createMissingClients(client c) {
+static void createMissingClients(void) {
     while(config.liveclients < config.numclients) {
         client new = createClient();
         if (!new) continue;
         prepareClientForQuery(new);
-        prepareClientForReply(new,c->replytype);
+        prepareClientForReply(new,new->replytype);
     }
 }
 
@@ -622,7 +621,7 @@ int main(int argc, char **argv) {
         c = createClient();
         prepareClientForQuery(c);
         prepareClientForReply(c,c->replytype);
-        createMissingClients(c);
+        createMissingClients();
         aeMain(config.el);
         endBenchmark("Report");
         printf("\n");
