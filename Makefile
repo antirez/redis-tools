@@ -15,7 +15,7 @@ CCOPT= $(CFLAGS) $(CCLINK) $(ARCH) $(PROF)
 DEBUG?= -g -rdynamic -ggdb 
 
 LOADOBJ = ae.o anet.o redis-load.o sds.o adlist.o zmalloc.o rc4rand.o
-STATOBJ = anet.o redis-stat.o sds.o zmalloc.o hiredis.o
+STATOBJ = anet.o redis-stat.o sds.o zmalloc.o hiredis.o utils.o
 
 LOADPRGNAME = redis-load
 STATPRGNAME = redis-stat
@@ -36,6 +36,7 @@ redis-stat.o: redis-stat.c fmacros.h anet.h sds.h zmalloc.h
 sds.o: sds.c sds.h zmalloc.h
 zmalloc.o: zmalloc.c config.h
 hiredis.o: hiredis.c hiredis.h
+utils.o: utils.c utils.h
 
 redis-load: $(LOADOBJ)
 	$(CC) -o $(LOADPRGNAME) $(CCOPT) $(DEBUG) $(LOADOBJ)
