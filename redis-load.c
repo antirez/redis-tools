@@ -1,6 +1,6 @@
 /* Redis load utility.
  *
- * Copyright (c) 2006-2009, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2010, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
  *
  * This software is NOT released under a free software license.
@@ -19,6 +19,8 @@
 #include <signal.h>
 #include <assert.h>
 #include <signal.h>
+#include <math.h>
+#include <limits.h>
 
 #include "ae.h"
 #include "anet.h"
@@ -56,6 +58,8 @@ static struct config {
     int keyspace;
     int writes_perc;
     int check;
+    int longtail;
+    int longtail_order;
     aeEventLoop *el;
     char *hostip;
     int hostport;
@@ -104,6 +108,16 @@ static long long mstime(void) {
 /* Return a pseudo random number between min and max both inclusive */
 static long randbetween(long min, long max) {
     return min+(random()%(max-min+1));
+}
+
+/* PRNG biased accordingly to the power law (Long Tail alike) */
+unsigned long longtailprng(unsigned long min, unsigned long max, int n) {
+    unsigned long pl;
+    double r = (double)(random()&(INT_MAX-1))/INT_MAX;
+
+    max += 1;
+    pl = pow((pow(max,n+1) - pow(min,n+1))*r + pow(min,n+1),1.0/(n+1));
+    return (max-1-pl)+min;
 }
 
 static void freeClient(client c) {
@@ -196,7 +210,13 @@ static void prepareClientForReply(client c, int type) {
 
 static void prepareClientForQuery(client c) {
     long r = random() % 100;
-    long key = random() % config.keyspace;
+    long key;
+    
+    if (config.longtail) {
+        key = longtailprng(0,config.keyspace-1,config.longtail_order);
+    } else {
+        key = random() % config.keyspace;
+    }
 
     sdsfree(c->obuf);
     c->keyid = key;
@@ -472,7 +492,7 @@ void usage(char *wrong) {
     if (wrong)
         printf("Wrong option '%s' or option argument missing\n\n",wrong);
     printf(
-"Usage: redis-benchmark [-h <host>] [-p <port>] [-c <clients>] [-n <requests]> [-k <boolean>]\n\n"
+"Usage: redis-load ... options ...\n\n"
 " host <hostname>      Server hostname (default 127.0.0.1)\n"
 " port <hostname>      Server port (default 6379)\n"
 " clients <clients>    Number of parallel connections (default 50)\n"
@@ -484,6 +504,17 @@ void usage(char *wrong) {
 " keepalive            1=keep alive 0=reconnect (default 1)\n"
 " keyspace             The number of different keys to use (default 100k)\n"
 " check                Check integrity where reading data back\n"
+" longtail             Use long tail alike key access pattern distribution\n"
+" longtailorder        A value of 2: 20%% keys get 49%% accesses.\n"
+"                                 3: 20%% keys get 59%% accesses.\n"
+"                                 4: 20%% keys get 67%% accesses.\n"
+"                                 5: 20%% keys get 74%% accesses.\n"
+"                                 6: 20%% keys get 79%% accesses (default).\n"
+"                                 7: 20%% keys get 83%% accesses.\n"
+"                                 8: 20%% keys get 86%% accesses.\n"
+"                                 9: 20%% keys get 89%% accesses.\n"
+"                                10: 20%% keys get 91%% accesses.\n"
+"                                20: 20%% keys get 99%% accesses.\n"
 " seed <seed>          PRNG seed for deterministic load\n"
 " quiet                Quiet mode, less verbose\n"
 " loop                 Loop. Run the tests forever\n"
@@ -541,6 +572,15 @@ void parseOptions(int argc, char **argv) {
             config.quiet = 1;
         } else if (!strcmp(argv[i],"check")) {
             config.check = 1;
+        } else if (!strcmp(argv[i],"longtail")) {
+            config.longtail = 1;
+        } else if (!strcmp(argv[i],"longtailorder") && !lastarg) {
+            config.longtail_order = atoi(argv[i+1]);
+            i++;
+            if (config.longtail_order < 2 || config.longtail_order > 100) {
+                printf("Value out of range for 'longtailorder' option");
+                exit(1);
+            }
         } else if (!strcmp(argv[i],"loop")) {
             config.loop = 1;
         } else if (!strcmp(argv[i],"debug")) {
@@ -591,6 +631,7 @@ int main(int argc, char **argv) {
     config.datasize_max = 64;
     config.keyspace = DEFAULT_KEYSPACE; /* 100k */
     config.check = 0;
+    config.longtail = 0;
     config.quiet = 0;
     config.loop = 0;
     config.idlemode = 0;

@@ -15,10 +15,12 @@ CCOPT= $(CFLAGS) $(CCLINK) $(ARCH) $(PROF)
 DEBUG?= -g -rdynamic -ggdb 
 
 LOADOBJ = ae.o anet.o redis-load.o sds.o adlist.o zmalloc.o rc4rand.o
+STATOBJ = anet.o redis-stat.o sds.o zmalloc.o
 
 LOADPRGNAME = redis-load
+STATPRGNAME = redis-stat
 
-all: redis-load
+all: redis-load redis-stat
 
 # Deps (use make dep to generate this)
 adlist.o: adlist.c adlist.h zmalloc.h
@@ -30,11 +32,15 @@ anet.o: anet.c fmacros.h anet.h
 rc4rand.o: rc4rand.c
 redis-load.o: redis-load.c fmacros.h ae.h anet.h sds.h adlist.h zmalloc.h \
   rc4rand.h
+redis-stat.o: redis-stat.c fmacros.h anet.h sds.h zmalloc.h
 sds.o: sds.c sds.h zmalloc.h
 zmalloc.o: zmalloc.c config.h
 
 redis-load: $(LOADOBJ)
 	$(CC) -o $(LOADPRGNAME) $(CCOPT) $(DEBUG) $(LOADOBJ)
+
+redis-stat: $(STATOBJ)
+	$(CC) -o $(STATPRGNAME) $(CCOPT) $(DEBUG) $(STATOBJ)
 
 .c.o:
 	$(CC) -c $(CFLAGS) $(DEBUG) $(COMPILE_TIME) $<
