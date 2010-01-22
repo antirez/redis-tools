@@ -106,6 +106,7 @@ void vmstat(int fd) {
     redisReply *r;
     int c = 0;
     long aux, pagein = 0, pageout = 0, usedpages = 0, usedmemory = 0;
+    long swapped = 0;
 
     while(1) {
         char buf[64];
@@ -118,16 +119,16 @@ void vmstat(int fd) {
 
         if ((c % 20) == 0) {
             printf(
-"--------------- pages -------------- ----- memory -----\n");
+" --------------- pages -------------- ----- objects ------ ----- memory -----\n");
             printf(
-"in       out      used     delta     used     delta    \n");
+" in       out      used     delta     swapped   delta      used     delta    \n");
         }
 
         /* pagein */
         aux = getLongInfoField(r->reply,"vm_stats_swappin_count");
         sprintf(buf,"%ld",aux-pagein);
         pagein = aux;
-        printf("%-9s",buf);
+        printf(" %-9s",buf);
 
         /* pageout */
         aux = getLongInfoField(r->reply,"vm_stats_swappout_count");
@@ -143,6 +144,15 @@ void vmstat(int fd) {
         sprintf(buf,"%ld",aux-usedpages);
         usedpages = aux;
         printf("%-9s",buf);
+
+        /* Swapped objects */
+        aux = getLongInfoField(r->reply,"vm_stats_swapped_objects");
+        sprintf(buf,"%ld",aux);
+        printf(" %-10s",buf);
+
+        sprintf(buf,"%ld",aux-swapped);
+        swapped = aux;
+        printf("%-10s",buf);
 
         /* Used memory */
         aux = getLongInfoField(r->reply,"used_memory");
