@@ -209,6 +209,7 @@ redisReply *redisCommand(int fd, char *format, ...) {
                 cmd = sdscat(cmd,"%");
                 break;
             }
+            c++;
         }
         c++;
     }

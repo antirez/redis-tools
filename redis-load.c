@@ -516,6 +516,8 @@ void usage(char *wrong) {
 "                                10: 20%% keys get 91%% accesses.\n"
 "                                20: 20%% keys get 99%% accesses.\n"
 " seed <seed>          PRNG seed for deterministic load\n"
+" big                  alias for keyspace 1000000 requests 1000000\n"
+" verybig              alias for keyspace 10000000 requests 10000000\n"
 " quiet                Quiet mode, less verbose\n"
 " loop                 Loop. Run the tests forever\n"
 " idle                 Idle mode. Just open N idle connections and wait.\n"
@@ -568,6 +570,12 @@ void parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i],"seed") && !lastarg) {
             config.prngseed = strtol(argv[i+1],NULL,10);
             i++;
+        } else if (!strcmp(argv[i],"big")) {
+            config.keyspace = 1000000;
+            config.requests = 1000000;
+        } else if (!strcmp(argv[i],"verybig")) {
+            config.keyspace = 10000000;
+            config.requests = 10000000;
         } else if (!strcmp(argv[i],"quiet")) {
             config.quiet = 1;
         } else if (!strcmp(argv[i],"check")) {
