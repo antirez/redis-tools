@@ -45,7 +45,7 @@ void usage(char *wrong) {
 "Options:\n"
 " host <hostname>      Server hostname (default 127.0.0.1)\n"
 " port <hostname>      Server port (default 6379)\n"
-" delay <seconds>      Delay between requests (default: 1 second).\n"
+" delay <milliseconds> Delay between requests (default: 1000 ms, 1 second).\n"
 );
     exit(1);
 }
@@ -66,6 +66,9 @@ static int parseOptions(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i],"port") && !lastarg) {
             config.hostport = atoi(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"delay") && !lastarg) {
+            config.delay = atoi(argv[i+1]);
             i++;
         } else if (!strcmp(argv[i],"help")) {
             usage(NULL);
@@ -119,9 +122,9 @@ void vmstat(int fd) {
 
         if ((c % 20) == 0) {
             printf(
-" --------------- pages -------------- ----- objects ------ ----- memory -----\n");
+" --------------- objects --------------- ------ pages ------ ----- memory -----\n");
             printf(
-" in       out      used     delta     swapped   delta      used     delta    \n");
+" load-in  swap-out  swapped   delta      used     delta      used     delta    \n");
         }
 
         /* pagein */
@@ -136,23 +139,27 @@ void vmstat(int fd) {
         pageout = aux;
         printf("%-9s",buf);
 
-        /* used pages */
-        aux = getLongInfoField(r->reply,"vm_stats_used_pages");
-        sprintf(buf,"%ld",aux);
-        printf("%-9s",buf);
-
-        sprintf(buf,"%ld",aux-usedpages);
-        usedpages = aux;
-        printf("%-9s",buf);
-
         /* Swapped objects */
         aux = getLongInfoField(r->reply,"vm_stats_swapped_objects");
         sprintf(buf,"%ld",aux);
         printf(" %-10s",buf);
 
         sprintf(buf,"%ld",aux-swapped);
+        if (aux-swapped == 0) printf(" ");
+        else if (aux-swapped > 0) printf("+");
         swapped = aux;
         printf("%-10s",buf);
+
+        /* used pages */
+        aux = getLongInfoField(r->reply,"vm_stats_used_pages");
+        sprintf(buf,"%ld",aux);
+        printf("%-9s",buf);
+
+        sprintf(buf,"%ld",aux-usedpages);
+        if (aux-usedpages == 0) printf(" ");
+        else if (aux-usedpages > 0) printf("+");
+        usedpages = aux;
+        printf("%-9s",buf);
 
         /* Used memory */
         aux = getLongInfoField(r->reply,"used_memory");
@@ -160,12 +167,14 @@ void vmstat(int fd) {
         printf(" %-9s",buf);
 
         bytesToHuman(buf,aux-usedmemory);
+        if (aux-usedmemory == 0) printf(" ");
+        else if (aux-usedmemory > 0) printf("+");
         usedmemory = aux;
         printf("%-9s",buf);
 
         printf("\n");
         freeReplyObject(r);
-        sleep(config.delay);
+        usleep(config.delay*1000);
         c++;
     }
 }
@@ -177,7 +186,7 @@ int main(int argc, char **argv) {
     config.hostip = "127.0.0.1";
     config.hostport = 6379;
     config.stat = STAT_VMSTAT;
-    config.delay = 1;
+    config.delay = 1000;
 
     parseOptions(argc,argv);
 
