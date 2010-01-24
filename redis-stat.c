@@ -204,7 +204,7 @@ size_t getSerializedLen(int fd, char *key) {
         char *p;
 
         p = strstr(r->reply,"serializedlength:");
-        sl = strtol(p+17,NULL,10);
+        if (p) sl = strtol(p+17,NULL,10);
     } else {
         printf("%s\n", r->reply);
     }

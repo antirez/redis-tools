@@ -1,0 +1,19 @@
+redis-load
+
+    - expire %
+    - set % (insetad of writes %)
+    - lpush %
+    - lpop %
+    - sadd %
+    - srandpop %
+    - ltrim %
+    - lrange %
+    - zadd %
+    - zrem %
+    - zrange %
+
+redis-stat
+
+    - overview (keys, memory, clients, requests, connections, lastsave, bgops)
+    - vmpage (guess best VM page size)
+    - analyze (percentage of types, average list/set/string len, avg bytes per key)
