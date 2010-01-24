@@ -17,3 +17,12 @@ redis-stat
     - overview (keys, memory, clients, requests, connections, lastsave, bgops)
     - vmpage (guess best VM page size)
     - analyze (percentage of types, average list/set/string len, avg bytes per key)
+
+redis-diff
+
+    - diff host1 host2: Perform the difference between two running databases
+    - hash host: Compute the SHA1SUM of host dataset
+
+redis-dump
+
+    ability to dump the DB into MySQL and CSV format

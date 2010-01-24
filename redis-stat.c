@@ -28,6 +28,7 @@
 
 #define STAT_VMSTAT 0
 #define STAT_VMPAGE 1
+#define STAT_OVERVIEW 2
 
 static struct config {
     char *hostip;
@@ -43,6 +44,7 @@ void usage(char *wrong) {
     printf(
 "Usage: redis-stat <type> ... options ...\n\n"
 "Statistic types:\n"
+" overview (default)   Print general information about a Redis instance.\n"
 " vmstat               Print information about Redis VM activity.\n"
 " vmpage               Try to guess the best vm-page-size for your dataset.\n"
 "\n"
@@ -82,6 +84,8 @@ static int parseOptions(int argc, char **argv) {
             config.stat = STAT_VMSTAT;
         } else if (!strcmp(argv[i],"vmpage")) {
             config.stat = STAT_VMPAGE;
+        } else if (!strcmp(argv[i],"overview")) {
+            config.stat = STAT_OVERVIEW;
         } else if (!strcmp(argv[i],"help")) {
             usage(NULL);
         } else {
@@ -97,12 +101,14 @@ static int parseOptions(int argc, char **argv) {
  * If the field is not found NULL is returned. */
 static sds getInfoField(char *info, char *field) {
     char *p = strstr(info,field);
-    char *n;
+    char *n1, *n2;
 
     if (!p) return NULL;
-    p = strchr(p,':')+1;
-    n = strchr(p,'\r');
-    return sdsnewlen(p,(n-p)+1);
+    p += strlen(field)+1;
+    n1 = strchr(p,'\r');
+    n2 = strchr(p,',');
+    if (n2 && n2 < n1) n1 = n2;
+    return sdsnewlen(p,(n1-p));
 }
 
 /* Like the above function but automatically convert the result into
@@ -115,6 +121,53 @@ static long getLongInfoField(char *info, char *field) {
     l = strtol(val,NULL,10);
     sdsfree(val);
     return l;
+}
+
+static void overview(int fd) {
+    redisReply *r;
+    int c = 0;
+    long aux;
+
+    while(1) {
+        char buf[64];
+        int j;
+
+        r = redisCommand(fd,"INFO");
+        if (r->type == REDIS_REPLY_ERROR) {
+            printf("ERROR: %s\n", r->reply);
+            exit(1);
+        }
+
+        if ((c % 20) == 0) {
+            printf(
+" ------- data ------ ------------ load --------- -----  -----\n");
+            printf(
+" keys      used-mem  clients blpops  requests    \n");
+        }
+
+        /* Keys */
+        aux = 0;
+        for (j = 0; j < 20; j++) {
+            long k;
+
+            sprintf(buf,"db%d:keys",j);
+            k = getLongInfoField(r->reply,buf);
+            if (k == LONG_MIN) continue;
+            aux += k;
+        }
+        sprintf(buf,"%ld",aux);
+        printf(" %-10s",buf);
+
+        /* Used memory */
+        aux = getLongInfoField(r->reply,"used_memory");
+        bytesToHuman(buf,aux);
+        printf("%-9s",buf);
+
+        printf("\n");
+        freeReplyObject(r);
+        usleep(config.delay*1000);
+        c++;
+    }
 }
 
 static void vmstat(int fd) {
@@ -141,6 +194,10 @@ static void vmstat(int fd) {
 
         /* pagein */
         aux = getLongInfoField(r->reply,"vm_stats_swappin_count");
+        if (aux == LONG_MIN) {
+            printf("\nError: Redis instance has VM disabled?\n");
+            exit(1);
+        }
         sprintf(buf,"%ld",aux-pagein);
         pagein = aux;
         printf(" %-9s",buf);
@@ -322,7 +379,7 @@ int main(int argc, char **argv) {
 
     config.hostip = "127.0.0.1";
     config.hostport = 6379;
-    config.stat = STAT_VMSTAT;
+    config.stat = STAT_OVERVIEW;
     config.delay = 1000;
     config.samplesize = 10000;
 
@@ -341,6 +398,9 @@ int main(int argc, char **argv) {
         break;
     case STAT_VMPAGE:
         vmpage(fd);
+        break;
+    case STAT_OVERVIEW:
+        overview(fd);
         break;
     }
     return 0;
