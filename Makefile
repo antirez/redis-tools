@@ -48,7 +48,7 @@ redis-stat: $(STATOBJ)
 	$(CC) -c $(CFLAGS) $(DEBUG) $(COMPILE_TIME) $<
 
 clean:
-	rm -rf $(LOADPRGNAME) *.o *.gcda *.gcno *.gcov
+	rm -rf $(LOADPRGNAME) $(STATPRGNAME) *.o *.gcda *.gcno *.gcov
 
 dep:
 	$(CC) -MM *.c

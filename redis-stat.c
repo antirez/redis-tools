@@ -126,7 +126,7 @@ static long getLongInfoField(char *info, char *field) {
 static void overview(int fd) {
     redisReply *r;
     int c = 0;
-    long aux;
+    long aux, requests = 0;
 
     while(1) {
         char buf[64];
@@ -140,9 +140,9 @@ static void overview(int fd) {
 
         if ((c % 20) == 0) {
             printf(
-" ------- data ------ ------------ load --------- -----  -----\n");
+" ------- data ------ ------------ load ----------------------------- - childs -\n");
             printf(
-" keys      used-mem  clients blpops  requests    \n");
+" keys      used-mem  clients blpops  requests            connections\n");
         }
 
         /* Keys */
@@ -162,6 +162,43 @@ static void overview(int fd) {
         aux = getLongInfoField(r->reply,"used_memory");
         bytesToHuman(buf,aux);
         printf("%-9s",buf);
+
+        /* Clients */
+        aux = getLongInfoField(r->reply,"connected_clients");
+        sprintf(buf,"%ld",aux);
+        printf(" %-8s",buf);
+
+        /* Blocked (BLPOPPING) Clients */
+        aux = getLongInfoField(r->reply,"blocked_clients");
+        sprintf(buf,"%ld",aux);
+        printf("%-8s",buf);
+
+        /* Requets */
+        aux = getLongInfoField(r->reply,"total_commands_processed");
+        sprintf(buf,"%ld (+%ld)",aux,aux-requests);
+        printf("%-19s",buf);
+        requests = aux;
+
+        /* Connections */
+        aux = getLongInfoField(r->reply,"total_connections_received");
+        sprintf(buf,"%ld",aux);
+        printf(" %-12s",buf);
+
+        /* Childs */
+        aux = getLongInfoField(r->reply,"bgsave_in_progress");
+        aux |= getLongInfoField(r->reply,"bgrewriteaof_in_progress") << 1;
+        switch(aux) {
+        case 0: break;
+        case 1:
+            printf("BGSAVE");
+            break;
+        case 2:
+            printf("AOFREWRITE");
+            break;
+        case 3:
+            printf("BGSAVE+AOF");
+            break;
+        }
 
         printf("\n");
         freeReplyObject(r);
