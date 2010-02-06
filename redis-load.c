@@ -58,6 +58,7 @@ static struct config {
     int keyspace;
     int writes_perc;
     int check;
+    int rand;
     int longtail;
     int longtail_order;
     aeEventLoop *el;
@@ -243,7 +244,12 @@ static void prepareClientForQuery(client c) {
         if (config.check) {
             rc4rand_set(data,datalen);
         } else {
-            memset(data,'x',datalen);
+            if (config.rand) {
+                rc4rand_seed(key);
+                rc4rand_set(data,datalen);
+            } else {
+                memset(data,'x',datalen);
+            }
         }
         data[datalen] = '\r';
         data[datalen+1] = '\n';
@@ -500,10 +506,11 @@ void usage(char *wrong) {
 " writes <percentage>  Percentage of writes (default 50, that is 50%%)\n"
 " mindatasize <size>   Min data size of SET values in bytes (default 1)\n"
 " maxdatasize <size>   Min data size of SET values in bytes (default 64)\n"
-" datasize <size>      Set both min and max datasize to the same value\n"
+" datasize <size>      Set both min and max data size to the same value\n"
 " keepalive            1=keep alive 0=reconnect (default 1)\n"
 " keyspace             The number of different keys to use (default 100k)\n"
-" check                Check integrity where reading data back\n"
+" rand                 Use random data payload (incompressible)\n"
+" check                Check integrity where reading data back (implies rand)\n"
 " longtail             Use long tail alike key access pattern distribution\n"
 " longtailorder        A value of 2: 20%% keys get 49%% accesses.\n"
 "                                 3: 20%% keys get 59%% accesses.\n"
@@ -580,6 +587,8 @@ void parseOptions(int argc, char **argv) {
             config.quiet = 1;
         } else if (!strcmp(argv[i],"check")) {
             config.check = 1;
+        } else if (!strcmp(argv[i],"rand")) {
+            config.rand = 1;
         } else if (!strcmp(argv[i],"longtail")) {
             config.longtail = 1;
         } else if (!strcmp(argv[i],"longtailorder") && !lastarg) {
@@ -639,6 +648,7 @@ int main(int argc, char **argv) {
     config.datasize_max = 64;
     config.keyspace = DEFAULT_KEYSPACE; /* 100k */
     config.check = 0;
+    config.rand = 0;
     config.longtail = 0;
     config.quiet = 0;
     config.loop = 0;

@@ -29,6 +29,7 @@
 #define STAT_VMSTAT 0
 #define STAT_VMPAGE 1
 #define STAT_OVERVIEW 2
+#define STAT_ONDISK_SIZE 3
 
 static struct config {
     char *hostip;
@@ -47,6 +48,7 @@ void usage(char *wrong) {
 " overview (default)   Print general information about a Redis instance.\n"
 " vmstat               Print information about Redis VM activity.\n"
 " vmpage               Try to guess the best vm-page-size for your dataset.\n"
+" ondisk-size          Stats and graphs about values len once stored on disk.\n"
 "\n"
 "Options:\n"
 " host <hostname>      Server hostname (default 127.0.0.1)\n"
@@ -86,6 +88,8 @@ static int parseOptions(int argc, char **argv) {
             config.stat = STAT_VMPAGE;
         } else if (!strcmp(argv[i],"overview")) {
             config.stat = STAT_OVERVIEW;
+        } else if (!strcmp(argv[i],"ondisk-size")) {
+            config.stat = STAT_ONDISK_SIZE;
         } else if (!strcmp(argv[i],"help")) {
             usage(NULL);
         } else {
@@ -306,6 +310,57 @@ size_t getSerializedLen(int fd, char *key) {
     return sl;
 }
 
+#define SAMPLE_SERIALIZEDLEN 0
+#define SAMPLE_TYPE 1
+#define SAMPLE_REFCOUNT 2
+static size_t *sampleDataset(int fd, int type) {
+    redisReply *r;
+    size_t *samples = zmalloc(config.samplesize*sizeof(size_t));
+    size_t totsl = 0, deltasum, avg;
+    int j;
+
+    printf("Sampling %d random keys from DB 0...\n", config.samplesize);
+    for (j = 0; j < config.samplesize; j++) {
+        size_t sl = 0;
+
+        /* Select a RANDOM key */
+        r = redisCommand(fd,"RANDOMKEY");
+        if (r->type == REDIS_REPLY_NIL) {
+            printf("Sorry but DB 0 is empty\n");
+            exit(1);
+        } else if (r->type == REDIS_REPLY_ERROR) {
+            printf("Error: %s\n", r->reply);
+            exit(1);
+        }
+        /* Store the lenght of this object in our sampling vector */
+        if (type == SAMPLE_SERIALIZEDLEN) {
+            sl = getSerializedLen(fd, r->reply);
+            freeReplyObject(r);
+
+            if (sl == 0) {
+                /* Problem getting the  length of this object, don't count
+                 * this try. */
+                j--;
+                continue;
+            }
+        }
+
+        samples[j] = sl;
+        totsl += sl;
+    }
+    printf("  Average: %zu\n", totsl/config.samplesize);
+
+    deltasum = 0, avg = totsl/config.samplesize;
+    for (j = 0; j < config.samplesize; j++) {
+        long delta = avg-samples[j];
+
+        deltasum += delta*delta;
+    }
+    printf("  Standard deviation: %.2lf\n\n",
+        sqrt(deltasum/config.samplesize));
+    return samples;
+}
+
 /* The following function implements the "vmpage" statistic, that is,
  * it tries to perform a few simulations with data gained from the dataset
  * in order to understand what's the best vm-page-size for your dataset.
@@ -320,51 +375,11 @@ size_t getSerializedLen(int fd, char *key) {
  * want to optimized page size while the number of pages is taken fixed. */
 #define VMPAGE_PAGES 1000000
 static void vmpage(int fd) {
-    redisReply *r;
-    size_t *samples = zmalloc(config.samplesize*sizeof(size_t));
-    size_t totsl = 0;
     int j, pagesize, bestpagesize = 0;
     double bestscore = 0;
+    size_t *samples;
 
-    printf("Sampling %d random keys from DB 0...\n", config.samplesize);
-    for (j = 0; j < config.samplesize; j++) {
-        size_t sl;
-
-        /* Select a RANDOM key */
-        r = redisCommand(fd,"RANDOMKEY");
-        if (r->type == REDIS_REPLY_NIL) {
-            printf("Sorry but DB 0 is empty\n");
-            exit(1);
-        } else if (r->type == REDIS_REPLY_ERROR) {
-            printf("Error: %s\n", r->reply);
-            exit(1);
-        }
-        /* Store the lenght of this object in our sampling vector */
-        sl = getSerializedLen(fd, r->reply);
-        freeReplyObject(r);
-
-        if (sl == 0) {
-            /* Problem getting the  length of this object, don't count
-             * this try. */
-            j--;
-            continue;
-        }
-        samples[j] = sl;
-        totsl += sl;
-    }
-    printf("Average serialized value size is: %zu\n", totsl/config.samplesize);
-    /* Compute the standard deviation */
-    {
-        size_t deltasum = 0, avg = totsl/config.samplesize;
-
-        for (j = 0; j < config.samplesize; j++) {
-            long delta = avg-samples[j];
-
-            deltasum += delta*delta;
-        }
-        printf("Standard deviation: %.2lf\n",
-            sqrt(deltasum/config.samplesize));
-    }
+    samples = sampleDataset(fd,SAMPLE_SERIALIZEDLEN);
     printf("Simulate fragmentation with different page sizes...\n");
     for (pagesize = 8; pagesize <= 1024*64; pagesize*=2) {
         size_t totpages = VMPAGE_PAGES;
@@ -410,6 +425,62 @@ static void vmpage(int fd) {
     printf("\nThe best compromise between bytes per page and swap file size: %d\n", bestpagesize);
 }
 
+#define SCALE_POWEROFTWO 0
+#define SCALE_LINEAR 1
+#define GRAPH_ROWS 20
+#define GRAPH_BAR_LEN 50
+static void samplesToGraph(size_t *samples, int scaletype) {
+    size_t freq[GRAPH_ROWS];
+    size_t scale[GRAPH_ROWS];
+    size_t max = 0, sum = 0;
+    int j, i, high;
+
+    /* Initialize the frequency table and the scale. */
+    memset(freq,0,sizeof(freq));
+    for (j = 0; j < GRAPH_ROWS; j++) {
+        switch(scaletype) {
+        case SCALE_POWEROFTWO:
+            scale[j] = (size_t) pow(2,j);
+            break;
+        }
+    }
+    /* Increment the frequency table accordingly to the sample value */
+    for (j = 0; j < config.samplesize; j++) {
+        i = GRAPH_ROWS-1;
+        while (i > 0 && scale[i-1] >= samples[j]) i--;
+        freq[i]++;
+    }
+    /* Check what's the highest non-zero frequency element, so we can avoid
+     * printing the part of the histogram that's empty. We also need the
+     * max value in the freq table. */
+    for (high = GRAPH_ROWS-1; high > 0; high--)
+        if (freq[high]) break;
+    for (j = 0; j <= high; j++) {
+        if (max < freq[j]) max = freq[j];
+        sum += freq[j];
+    }
+    /* Our ASCII art business can start */
+    for (j = 0; j <= high; j++) {
+        char buf[32];
+        char bar[GRAPH_BAR_LEN+1];
+        int barlen;
+
+        sprintf(buf,"%ld",(long)scale[j]);
+        barlen = (freq[j]*GRAPH_BAR_LEN)/max;
+        memset(bar,'-',barlen);
+        bar[barlen] = '\0';
+        printf("<= %-10s |%s (%.2f%%)\n", buf, bar,
+            (float)freq[j]*100/sum);
+    }
+}
+
+static void ondiskSize(int fd) {
+    size_t *samples;
+
+    samples = sampleDataset(fd,SAMPLE_SERIALIZEDLEN);
+    samplesToGraph(samples, SCALE_POWEROFTWO);
+}
+
 int main(int argc, char **argv) {
     redisReply *r;
     int fd;
@@ -438,6 +509,9 @@ int main(int argc, char **argv) {
         break;
     case STAT_OVERVIEW:
         overview(fd);
+        break;
+    case STAT_ONDISK_SIZE:
+        ondiskSize(fd);
         break;
     }
     return 0;
