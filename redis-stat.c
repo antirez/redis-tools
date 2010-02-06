@@ -37,6 +37,7 @@ static struct config {
     int delay;
     int stat; /* The kind of output to produce: STAT_* */
     int samplesize;
+    int logscale;
 } config;
 
 void usage(char *wrong) {
@@ -55,6 +56,7 @@ void usage(char *wrong) {
 " port <hostname>      Server port (default 6379)\n"
 " delay <milliseconds> Delay between requests (default: 1000 ms, 1 second).\n"
 " samplesize <keys>    Number of keys to sample for 'vmpage' stat.\n"
+" logscale             User power-of-two logarithmic scale in graphs.\n"
 );
     exit(1);
 }
@@ -90,6 +92,8 @@ static int parseOptions(int argc, char **argv) {
             config.stat = STAT_OVERVIEW;
         } else if (!strcmp(argv[i],"ondisk-size")) {
             config.stat = STAT_ONDISK_SIZE;
+        } else if (!strcmp(argv[i],"logscale")) {
+            config.logscale = 1;
         } else if (!strcmp(argv[i],"help")) {
             usage(NULL);
         } else {
@@ -423,10 +427,14 @@ static void vmpage(int fd) {
         zfree(pages);
     }
     printf("\nThe best compromise between bytes per page and swap file size: %d\n", bestpagesize);
+    zfree(samples);
 }
 
 #define SCALE_POWEROFTWO 0
-#define SCALE_LINEAR 1
+#define SCALE_LINEAR_SMALL 1
+#define SCALE_LINEAR_MED 2
+#define SCALE_LINEAR_LARGE 3
+#define SCALE_LINEAR_AUTO 4
 #define GRAPH_ROWS 20
 #define GRAPH_BAR_LEN 50
 static void samplesToGraph(size_t *samples, int scaletype) {
@@ -435,12 +443,34 @@ static void samplesToGraph(size_t *samples, int scaletype) {
     size_t max = 0, sum = 0;
     int j, i, high;
 
+    /* Best linear scale auto detection */
+    if (scaletype == SCALE_LINEAR_AUTO) {
+        scaletype = SCALE_LINEAR_SMALL;
+        for (j = 0; j < config.samplesize; j++) {
+            if (scaletype == SCALE_LINEAR_SMALL && samples[j] > 1*GRAPH_ROWS)
+                scaletype = SCALE_LINEAR_MED;
+            if (scaletype == SCALE_LINEAR_MED && samples[j] > 5*GRAPH_ROWS) {
+                scaletype = SCALE_LINEAR_LARGE;
+                break; /* there is no scale bigger than this. */
+            }
+        }
+    }
+
     /* Initialize the frequency table and the scale. */
     memset(freq,0,sizeof(freq));
     for (j = 0; j < GRAPH_ROWS; j++) {
         switch(scaletype) {
         case SCALE_POWEROFTWO:
             scale[j] = (size_t) pow(2,j);
+            break;
+        case SCALE_LINEAR_SMALL:
+            scale[j] = j+1;
+            break;
+        case SCALE_LINEAR_MED:
+            scale[j] = (j+1)*5;
+            break;
+        case SCALE_LINEAR_LARGE:
+            scale[j] = (j+1)*50;
             break;
         }
     }
@@ -461,24 +491,32 @@ static void samplesToGraph(size_t *samples, int scaletype) {
     }
     /* Our ASCII art business can start */
     for (j = 0; j <= high; j++) {
-        char buf[32];
+        char buf[64];
         char bar[GRAPH_BAR_LEN+1];
         int barlen;
 
-        sprintf(buf,"%ld",(long)scale[j]);
+        if (j != high)
+            sprintf(buf,"<= %ld",(long)scale[j]);
+        else
+            sprintf(buf,">  %ld",(long)scale[j-1]);
         barlen = (freq[j]*GRAPH_BAR_LEN)/max;
         memset(bar,'-',barlen);
         bar[barlen] = '\0';
-        printf("<= %-10s |%s (%.2f%%)\n", buf, bar,
+        printf("%-13s |%s (%.2f%%)\n", buf, bar,
             (float)freq[j]*100/sum);
     }
+    zfree(samples);
 }
 
 static void ondiskSize(int fd) {
     size_t *samples;
 
     samples = sampleDataset(fd,SAMPLE_SERIALIZEDLEN);
-    samplesToGraph(samples, SCALE_POWEROFTWO);
+    if (config.logscale) {
+        samplesToGraph(samples, SCALE_POWEROFTWO);
+    } else {
+        samplesToGraph(samples, SCALE_LINEAR_AUTO);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -490,6 +528,7 @@ int main(int argc, char **argv) {
     config.stat = STAT_OVERVIEW;
     config.delay = 1000;
     config.samplesize = 10000;
+    config.logscale = 0;
 
     parseOptions(argc,argv);
 
