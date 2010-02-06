@@ -479,6 +479,7 @@ static void samplesToGraph(size_t *samples, int scaletype) {
         i = GRAPH_ROWS-1;
         while (i > 0 && scale[i-1] >= samples[j]) i--;
         freq[i]++;
+        printf("SAMPLE: %ld\n", samples[j]);
     }
     /* Check what's the highest non-zero frequency element, so we can avoid
      * printing the part of the histogram that's empty. We also need the
