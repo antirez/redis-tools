@@ -37,6 +37,8 @@
 #define REDIS_IDLE 0
 #define REDIS_GET 1
 #define REDIS_SET 2
+#define REDIS_DEL 3
+#define REDIS_SWAPIN 4
 
 #define CLIENT_CONNECTING 0
 #define CLIENT_SENDQUERY 1
@@ -56,7 +58,9 @@ static struct config {
     int datasize_min;
     int datasize_max;
     int keyspace;
-    int writes_perc;
+    int set_perc;
+    int del_perc;
+    int swapin_perc;
     int check;
     int rand;
     int longtail;
@@ -74,7 +78,21 @@ static struct config {
     int idlemode;
     int ctrlc; /* Ctrl + C pressed */
     unsigned int prngseed;
+    /* The following "optab" array is used in order to randomize the different
+     * kind of operations, like GET, SET, LPUSH, LPOP, SADD, and so forth.
+     * For every query the client will pick a random bucket from 0 to 99
+     * and will check what is the kind of operation to perform, also it will
+     * use the bucket ID in order to make sure this kind of operation is
+     * always executed against the right data type, so for instance if bucket
+     * 7 is a LPUSH the operation will be performed against key xxxxxx07
+     * and so forth. */
+    unsigned char optab[100];
 } config;
+
+#define OPTAB_GET 0
+#define OPTAB_SET 1
+#define OPTAB_DEL 2
+#define OPTAB_SWAPIN 3
 
 typedef struct _client {
     int state;
@@ -212,6 +230,7 @@ static void prepareClientForReply(client c, int type) {
 static void prepareClientForQuery(client c) {
     long r = random() % 100;
     long key;
+    int op = config.optab[r];
     
     if (config.longtail) {
         key = longtailprng(0,config.keyspace-1,config.longtail_order);
@@ -224,11 +243,11 @@ static void prepareClientForQuery(client c) {
     if (config.idlemode) {
         c->reqtype = REDIS_IDLE;
         c->obuf = sdsempty();
-    } else if (r < config.writes_perc) {
+    } else if (op == OPTAB_SET) {
         unsigned char *data;
         unsigned long datalen;
         
-        /* Write */
+        /* Set */
         c->reqtype = REDIS_SET;
         if (config.check) {
             rc4rand_seed(key);
@@ -256,8 +275,18 @@ static void prepareClientForQuery(client c) {
         c->obuf = sdscatlen(c->obuf,data,datalen+2);
         c->replytype = REPLY_RETCODE;
         zfree(data);
+    } else if (op == OPTAB_DEL) {
+        /* Del */
+        c->reqtype = REDIS_DEL;
+        c->obuf = sdscatprintf(sdsempty(),"DEL key:%ld\r\n",key);
+        c->replytype = REPLY_RETCODE;
+    } else if (op == OPTAB_SWAPIN) {
+        /* Debug Swapin -- useful to stress test the VM subsystem */
+        c->reqtype = REDIS_SWAPIN;
+        c->obuf = sdscatprintf(sdsempty(),"DEBUG SWAPIN key:%ld\r\n",key);
+        c->replytype = REPLY_RETCODE;
     } else {
-        /* Read */
+        /* Get */
         c->reqtype = REDIS_GET;
         c->obuf = sdscatprintf(sdsempty(),"GET key:%ld\r\n",key);
         c->replytype = REPLY_BULK;
@@ -494,7 +523,7 @@ static void endBenchmark(char *title) {
     freeAllClients();
 }
 
-void usage(char *wrong) {
+static void usage(char *wrong) {
     if (wrong)
         printf("Wrong option '%s' or option argument missing\n\n",wrong);
     printf(
@@ -503,9 +532,8 @@ void usage(char *wrong) {
 " port <hostname>      Server port (default 6379)\n"
 " clients <clients>    Number of parallel connections (default 50)\n"
 " requests <requests>  Total number of requests (default 10k)\n"
-" writes <percentage>  Percentage of writes (default 50, that is 50%%)\n"
-" mindatasize <size>   Min data size of SET values in bytes (default 1)\n"
-" maxdatasize <size>   Min data size of SET values in bytes (default 64)\n"
+" mindatasize <size>   Min data size of string values in bytes (default 1)\n"
+" maxdatasize <size>   Min data size of string values in bytes (default 64)\n"
 " datasize <size>      Set both min and max data size to the same value\n"
 " keepalive            1=keep alive 0=reconnect (default 1)\n"
 " keyspace             The number of different keys to use (default 100k)\n"
@@ -529,11 +557,19 @@ void usage(char *wrong) {
 " loop                 Loop. Run the tests forever\n"
 " idle                 Idle mode. Just open N idle connections and wait.\n"
 " debug                Debug mode. more verbose.\n"
+"\n"
+"Type of operations (use percentages without trailing %%):\n"
+"\n"
+" set <percentage>    Percentage of SETs (default 50)\n"
+" del <percentage>    Percentage of DELs (default 0)\n"
+" swapin <percentage> Percentage of DEBUG SWAPINs (default 0)\n"
+"\n"
+" All the free percantege (in order to reach 100%%) will be used for GETs\n"
 );
     exit(1);
 }
 
-void parseOptions(int argc, char **argv) {
+static void parseOptions(int argc, char **argv) {
     int i;
 
     for (i = 1; i < argc; i++) {
@@ -545,8 +581,14 @@ void parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i],"requests") && !lastarg) {
             config.requests = atoi(argv[i+1]);
             i++;
-        } else if (!strcmp(argv[i],"writes") && !lastarg) {
-            config.writes_perc = atoi(argv[i+1]);
+        } else if (!strcmp(argv[i],"set") && !lastarg) {
+            config.set_perc = atoi(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"del") && !lastarg) {
+            config.del_perc = atoi(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"swapin") && !lastarg) {
+            config.swapin_perc = atoi(argv[i+1]);
             i++;
         } else if (!strcmp(argv[i],"keepalive") && !lastarg) {
             config.keepalive = atoi(argv[i+1]);
@@ -618,7 +660,7 @@ void parseOptions(int argc, char **argv) {
     if (config.keyspace < 0) config.keyspace = 0;
 }
 
-void ctrlc(int sig) {
+static void ctrlc(int sig) {
     REDIS_NOTUSED(sig);
 
     config.ctrlc++;
@@ -630,8 +672,20 @@ void ctrlc(int sig) {
     }
 }
 
+static void fillOpTab(int *i, int op, int perc) {
+    int j;
+
+    for (j = 0; j < perc; j++) {
+        if (*i < 100) {
+            config.optab[*i] = op;
+            (*i)++;
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     client c;
+    int i;
 
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
@@ -642,7 +696,9 @@ int main(int argc, char **argv) {
     config.liveclients = 0;
     config.el = aeCreateEventLoop();
     config.keepalive = 1;
-    config.writes_perc = 50;
+    config.set_perc = 50;
+    config.del_perc = 0;
+    config.swapin_perc = 0;
     config.donerequests = 0;
     config.datasize_min = 1;
     config.datasize_max = 64;
@@ -671,6 +727,15 @@ int main(int argc, char **argv) {
     if (config.idlemode) {
         printf("Creating %d idle connections and waiting forever (Ctrl+C when done)\n", config.numclients);
     }
+
+    /* Setup the operation table. Start with a table with just GETs operations
+     * and overwrite it with the other kind of ops as needed. */
+    memset(config.optab,OPTAB_GET,100);
+    i = 0;
+    fillOpTab(&i,OPTAB_SET,config.set_perc);
+    fillOpTab(&i,OPTAB_DEL,config.del_perc);
+    fillOpTab(&i,OPTAB_SWAPIN,config.swapin_perc);
+//    fillOpTab(&i,OPTAB_EXPIRE,config.expire_perc);
 
     signal(SIGINT,ctrlc);
     srandom(config.prngseed);
