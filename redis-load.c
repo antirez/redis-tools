@@ -29,16 +29,19 @@
 #include "zmalloc.h"
 #include "rc4rand.h"
 
-#define REPLY_INT 0
-#define REPLY_RETCODE 1
-#define REPLY_BULK 2
-#define REPLY_MBULK 3
+#define REPLY_UNKNOWN 0
+#define REPLY_INT 1
+#define REPLY_RETCODE 2
+#define REPLY_BULK 3
+#define REPLY_MBULK 4
 
 #define REDIS_IDLE 0
 #define REDIS_GET 1
 #define REDIS_SET 2
 #define REDIS_DEL 3
 #define REDIS_SWAPIN 4
+#define REDIS_LPUSH 6
+#define REDIS_LPOP 7
 
 #define CLIENT_CONNECTING 0
 #define CLIENT_SENDQUERY 1
@@ -61,6 +64,8 @@ static struct config {
     int set_perc;
     int del_perc;
     int swapin_perc;
+    int lpush_perc;
+    int lpop_perc;
     int check;
     int rand;
     int longtail;
@@ -93,6 +98,8 @@ static struct config {
 #define OPTAB_SET 1
 #define OPTAB_DEL 2
 #define OPTAB_SWAPIN 3
+#define OPTAB_LPUSH 4
+#define OPTAB_LPOP 5
 
 typedef struct _client {
     int state;
@@ -210,6 +217,7 @@ static void resetClient(client c) {
     c->totreceived = 0;
     c->state = CLIENT_SENDQUERY;
     c->start = mstime();
+    c->replytype = REPLY_UNKNOWN;
     createMissingClients();
 }
 
@@ -273,23 +281,43 @@ static void prepareClientForQuery(client c) {
         data[datalen] = '\r';
         data[datalen+1] = '\n';
         c->obuf = sdscatlen(c->obuf,data,datalen+2);
-        c->replytype = REPLY_RETCODE;
+        zfree(data);
+    } else if (op == OPTAB_LPUSH) {
+        unsigned char *data;
+        unsigned long datalen;
+        
+        /* Lpush */
+        c->reqtype = REDIS_LPUSH;
+        datalen = randbetween(config.datasize_min,config.datasize_max);
+        data = zmalloc(datalen+2);
+        c->obuf = sdscatprintf(sdsempty(),"LPUSH key:%ld %lu\r\n",key,datalen);
+
+        if (config.rand) {
+            rc4rand_seed(key);
+            rc4rand_set(data,datalen);
+        } else {
+            memset(data,'x',datalen);
+        }
+        data[datalen] = '\r';
+        data[datalen+1] = '\n';
+        c->obuf = sdscatlen(c->obuf,data,datalen+2);
         zfree(data);
     } else if (op == OPTAB_DEL) {
         /* Del */
         c->reqtype = REDIS_DEL;
         c->obuf = sdscatprintf(sdsempty(),"DEL key:%ld\r\n",key);
-        c->replytype = REPLY_RETCODE;
     } else if (op == OPTAB_SWAPIN) {
         /* Debug Swapin -- useful to stress test the VM subsystem */
         c->reqtype = REDIS_SWAPIN;
         c->obuf = sdscatprintf(sdsempty(),"DEBUG SWAPIN key:%ld\r\n",key);
-        c->replytype = REPLY_RETCODE;
-    } else {
+    } else if (op == OPTAB_LPOP) {
+        /* Lpop */
+        c->reqtype = REDIS_LPOP;
+        c->obuf = sdscatprintf(sdsempty(),"LPOP key:%ld\r\n",key);
+    } else if (op == OPTAB_GET) {
         /* Get */
         c->reqtype = REDIS_GET;
         c->obuf = sdscatprintf(sdsempty(),"GET key:%ld\r\n",key);
-        c->replytype = REPLY_BULK;
     }
 }
 
@@ -316,7 +344,6 @@ static void clientDone(client c) {
     if (config.keepalive) {
         resetClient(c);
         prepareClientForQuery(c);
-        prepareClientForReply(c,c->replytype);
     } else {
         config.liveclients--;
         createMissingClients();
@@ -347,6 +374,17 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask)
     }
     c->totreceived += nread;
     c->ibuf = sdscatlen(c->ibuf,buf,nread);
+    if (c->replytype == REPLY_UNKNOWN) {
+        int rtype;
+
+        switch(c->ibuf[0]) {
+        case '*': rtype = REPLY_MBULK; break;
+        case '$': rtype = REPLY_BULK; break;
+        case ':': rtype = REPLY_INT; break;
+        default: rtype = REPLY_RETCODE; break;
+        }
+        prepareClientForReply(c,rtype);
+    }
 
 processdata:
     /* Are we waiting for the first line of the command of for  sdf 
@@ -562,6 +600,8 @@ static void usage(char *wrong) {
 "\n"
 " set <percentage>    Percentage of SETs (default 50)\n"
 " del <percentage>    Percentage of DELs (default 0)\n"
+" lpush <percentage>  Percentage of LPUSHs (default 0)\n"
+" lpop <percentage>   Percentage of LPOPs (default 0)\n"
 " swapin <percentage> Percentage of DEBUG SWAPINs (default 0)\n"
 "\n"
 " All the free percantege (in order to reach 100%%) will be used for GETs\n"
@@ -589,6 +629,12 @@ static void parseOptions(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i],"swapin") && !lastarg) {
             config.swapin_perc = atoi(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"lpush") && !lastarg) {
+            config.lpush_perc = atoi(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"lpop") && !lastarg) {
+            config.lpop_perc = atoi(argv[i+1]);
             i++;
         } else if (!strcmp(argv[i],"keepalive") && !lastarg) {
             config.keepalive = atoi(argv[i+1]);
@@ -699,6 +745,8 @@ int main(int argc, char **argv) {
     config.set_perc = 50;
     config.del_perc = 0;
     config.swapin_perc = 0;
+    config.lpush_perc = 0;
+    config.lpop_perc = 0;
     config.donerequests = 0;
     config.datasize_min = 1;
     config.datasize_max = 64;
@@ -735,7 +783,8 @@ int main(int argc, char **argv) {
     fillOpTab(&i,OPTAB_SET,config.set_perc);
     fillOpTab(&i,OPTAB_DEL,config.del_perc);
     fillOpTab(&i,OPTAB_SWAPIN,config.swapin_perc);
-//    fillOpTab(&i,OPTAB_EXPIRE,config.expire_perc);
+    fillOpTab(&i,OPTAB_LPUSH,config.lpush_perc);
+    fillOpTab(&i,OPTAB_LPOP,config.lpop_perc);
 
     signal(SIGINT,ctrlc);
     srandom(config.prngseed);
