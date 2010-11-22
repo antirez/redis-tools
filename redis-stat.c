@@ -41,16 +41,6 @@ static struct config {
     int logscale;
 } config;
 
-static long long microseconds(void) {
-    struct timeval tv;
-    long long mst;
-
-    gettimeofday(&tv, NULL);
-    mst = ((long long)tv.tv_sec)*1000000;
-    mst += tv.tv_usec;
-    return mst;
-}
-
 /* Return the specified INFO field from the INFO command output "info".
  * A new buffer is allocated for the result, that needs to be free'd.
  * If the field is not found NULL is returned. */

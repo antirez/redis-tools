@@ -1,7 +1,18 @@
 #include <stdio.h>
+#include <sys/time.h>
 
-/* Convert an amount of bytes into a human readable string in the form
- * of 100B, 2G, 100M, 4K, and so forth. */
+/* Returns the number of microseconds since Unix epoch. */
+long long microseconds(void) {
+    struct timeval tv;
+    long long mst;
+    gettimeofday(&tv, NULL);
+    mst = ((long long)tv.tv_sec)*1000000;
+    mst += tv.tv_usec;
+    return mst;
+}
+
+/* Convert number of bytes into a human readable string of the form:
+ * 100B, 2G, 100M, 4K, and so forth. */
 void bytesToHuman(char *s, long long n) {
     double d;
 
@@ -25,3 +36,4 @@ void bytesToHuman(char *s, long long n) {
         sprintf(s,"%.2fG",d);
     }
 }
+
