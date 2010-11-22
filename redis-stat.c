@@ -51,67 +51,6 @@ static long long microseconds(void) {
     return mst;
 }
 
-void usage(char *wrong) {
-    if (wrong)
-        printf("Wrong option '%s' or option argument missing\n\n",wrong);
-    printf(
-"Usage: redis-stat <type> ... options ...\n\n"
-"Statistic types:\n"
-" overview (default)   Print general information about a Redis instance.\n"
-" vmstat               Print information about Redis VM activity.\n"
-" vmpage               Try to guess the best vm-page-size for your dataset.\n"
-" ondisk-size          Stats and graphs about values len once stored on disk.\n"
-" latency              Measure Redis server latency.\n"
-"\n"
-"Options:\n"
-" host <hostname>      Server hostname (default 127.0.0.1)\n"
-" port <hostname>      Server port (default 6379)\n"
-" delay <milliseconds> Delay between requests (default: 1000 ms, 1 second).\n"
-" samplesize <keys>    Number of keys to sample for 'vmpage' stat.\n"
-" logscale             User power-of-two logarithmic scale in graphs.\n"
-);
-    exit(1);
-}
-
-static int parseOptions(int argc, char **argv) {
-    int i;
-
-    for (i = 1; i < argc; i++) {
-        int lastarg = i==argc-1;
-        
-        if (!strcmp(argv[i],"host") && !lastarg) {
-            config.hostip = argv[i+1];
-            i++;
-        } else if (!strcmp(argv[i],"port") && !lastarg) {
-            config.hostport = atoi(argv[i+1]);
-            i++;
-        } else if (!strcmp(argv[i],"delay") && !lastarg) {
-            config.delay = atoi(argv[i+1]);
-            i++;
-        } else if (!strcmp(argv[i],"samplesize") && !lastarg) {
-            config.samplesize = atoi(argv[i+1]);
-            i++;
-        } else if (!strcmp(argv[i],"vmstat")) {
-            config.stat = STAT_VMSTAT;
-        } else if (!strcmp(argv[i],"vmpage")) {
-            config.stat = STAT_VMPAGE;
-        } else if (!strcmp(argv[i],"overview")) {
-            config.stat = STAT_OVERVIEW;
-        } else if (!strcmp(argv[i],"ondisk-size")) {
-            config.stat = STAT_ONDISK_SIZE;
-        } else if (!strcmp(argv[i],"latency")) {
-            config.stat = STAT_LATENCY;
-        } else if (!strcmp(argv[i],"logscale")) {
-            config.logscale = 1;
-        } else if (!strcmp(argv[i],"help")) {
-            usage(NULL);
-        } else {
-            usage(argv[i]);
-        }
-    }
-    return i;
-}
-
 /* Return the specified INFO field from the INFO command output "info".
  * A new buffer is allocated for the result, that needs to be free'd.
  * If the field is not found NULL is returned. */
@@ -562,6 +501,67 @@ static void latency(redisContext *c) {
         usleep(config.delay*1000);
         seq++;
     }
+}
+
+static void usage(char *wrong) {
+    if (wrong)
+        printf("Wrong option '%s' or option argument missing\n\n",wrong);
+    printf(
+"Usage: redis-stat <type> ... options ...\n\n"
+"Statistic types:\n"
+" overview (default)   Print general information about a Redis instance.\n"
+" vmstat               Print information about Redis VM activity.\n"
+" vmpage               Try to guess the best vm-page-size for your dataset.\n"
+" ondisk-size          Stats and graphs about values len once stored on disk.\n"
+" latency              Measure Redis server latency.\n"
+"\n"
+"Options:\n"
+" host <hostname>      Server hostname (default 127.0.0.1)\n"
+" port <hostname>      Server port (default 6379)\n"
+" delay <milliseconds> Delay between requests (default: 1000 ms, 1 second).\n"
+" samplesize <keys>    Number of keys to sample for 'vmpage' stat.\n"
+" logscale             User power-of-two logarithmic scale in graphs.\n"
+);
+    exit(1);
+}
+
+static int parseOptions(int argc, char **argv) {
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        int lastarg = (i == (argc-1));
+
+        if (!strcmp(argv[i],"host") && !lastarg) {
+            config.hostip = argv[i+1];
+            i++;
+        } else if (!strcmp(argv[i],"port") && !lastarg) {
+            config.hostport = atoi(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"delay") && !lastarg) {
+            config.delay = atoi(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"samplesize") && !lastarg) {
+            config.samplesize = atoi(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"vmstat")) {
+            config.stat = STAT_VMSTAT;
+        } else if (!strcmp(argv[i],"vmpage")) {
+            config.stat = STAT_VMPAGE;
+        } else if (!strcmp(argv[i],"overview")) {
+            config.stat = STAT_OVERVIEW;
+        } else if (!strcmp(argv[i],"ondisk-size")) {
+            config.stat = STAT_ONDISK_SIZE;
+        } else if (!strcmp(argv[i],"latency")) {
+            config.stat = STAT_LATENCY;
+        } else if (!strcmp(argv[i],"logscale")) {
+            config.logscale = 1;
+        } else if (!strcmp(argv[i],"help")) {
+            usage(NULL);
+        } else {
+            usage(argv[i]);
+        }
+    }
+    return i;
 }
 
 int main(int argc, char **argv) {
