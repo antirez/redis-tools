@@ -169,19 +169,20 @@ static void vmstat(redisContext *c) {
             exit(1);
         }
 
+        aux = getLongInfoField(reply->str,"vm_enabled");
+        if (aux == LONG_MIN || aux == 0) {
+            printf("ERROR: Redis instance has VM disabled\n");
+            exit(1);
+        }
+
         if ((i++ % 20) == 0) {
             printf(
-" --------------- objects --------------- ------ pages ------ ----- memory -----\n");
-            printf(
+" --------------- objects --------------- ------ pages ------ ----- memory -----\n"
 " load-in  swap-out  swapped   delta      used     delta      used     delta    \n");
         }
 
         /* pagein */
         aux = getLongInfoField(reply->str,"vm_stats_swappin_count");
-        if (aux == LONG_MIN) {
-            printf("\nError: Redis instance has VM disabled?\n");
-            exit(1);
-        }
         sprintf(buf,"%ld",aux-pagein);
         pagein = aux;
         printf(" %-9s",buf);
@@ -228,7 +229,6 @@ static void vmstat(redisContext *c) {
         printf("\n");
         freeReplyObject(reply);
         usleep(config.delay*1000);
-        c++;
     }
 }
 
