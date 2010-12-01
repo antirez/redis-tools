@@ -22,18 +22,11 @@
 #include <math.h>
 #include <limits.h>
 
-#include "ae.h"
-#include "anet.h"
-#include "sds.h"
+#include "hiredis.h"
+#include "adapters/ae.h"
 #include "adlist.h"
 #include "zmalloc.h"
 #include "rc4rand.h"
-
-#define REPLY_UNKNOWN 0
-#define REPLY_INT 1
-#define REPLY_RETCODE 2
-#define REPLY_BULK 3
-#define REPLY_MBULK 4
 
 #define REDIS_IDLE 0
 #define REDIS_GET 1
@@ -42,10 +35,6 @@
 #define REDIS_SWAPIN 4
 #define REDIS_LPUSH 6
 #define REDIS_LPOP 7
-
-#define CLIENT_CONNECTING 0
-#define CLIENT_SENDQUERY 1
-#define CLIENT_READREPLY 2
 
 #define MAX_LATENCY 5000
 #define DEFAULT_KEYSPACE 100000 /* 100k */
@@ -102,22 +91,15 @@ static struct config {
 #define OPTAB_LPOP 5
 
 typedef struct _client {
+    redisAsyncContext *context;
     int state;
-    int fd;
     int reqtype;        /* request type. REDIS_GET, REDIS_SET, ... */
-    sds obuf;
-    sds ibuf;
-    int mbulk;          /* Number of elements in an mbulk reply */
-    int readlen;        /* readlen == -1 means read a single line */
-    int totreceived;
-    unsigned int written;        /* bytes of 'obuf' already written */
-    int replytype;
     long long start;    /* start time in milliseconds */
     long keyid;          /* the key name for this request is "key:<keyid>" */
 } *client;
 
 /* Prototypes */
-static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask);
+static void issueRequest(client c);
 static void createMissingClients(void);
 
 /* Implementation */
@@ -146,31 +128,58 @@ unsigned long longtailprng(unsigned long min, unsigned long max, int n) {
     return (max-1-pl)+min;
 }
 
-static void freeClient(client c) {
+static void clientDisconnected(const redisAsyncContext *context, int status) {
     listNode *ln;
+    client c = (client)context->data;
 
-    aeDeleteFileEvent(config.el,c->fd,AE_WRITABLE);
-    aeDeleteFileEvent(config.el,c->fd,AE_READABLE);
-    sdsfree(c->ibuf);
-    sdsfree(c->obuf);
-    close(c->fd);
-    zfree(c);
+    if (status != REDIS_OK) {
+        printf("Non-ok disconnect (TODO)\n");
+        exit(1);
+    }
+
     config.liveclients--;
     ln = listSearchKey(config.clients,c);
     assert(ln != NULL);
     listDelNode(config.clients,ln);
-}
+    zfree(c);
 
-static void freeAllClients(void) {
-    listNode *ln = config.clients->head, *next;
-
-    while(ln) {
-        next = ln->next;
-        freeClient(ln->value);
-        ln = next;
+    /* Stop the event loop when all clients were disconnected */
+    if (!listLength(config.clients)) {
+        aeStop(config.el);
     }
 }
 
+static client createClient(void) {
+    client c = zmalloc(sizeof(struct _client));
+
+    c->context = redisAsyncConnect(config.hostip,config.hostport);
+    c->context->data = c;
+    redisAsyncSetDisconnectCallback(c->context,clientDisconnected);
+    if (c->context->err) {
+        fprintf(stderr,"Connect: %s\n",c->context->errstr);
+        redisFree((redisContext*)c->context);
+        zfree(c);
+        exit(1);
+    }
+
+    redisAeAttach(config.el,c->context);
+    config.liveclients++;
+    listAddNodeTail(config.clients,c);
+    issueRequest(c);
+    return c;
+}
+
+static void createMissingClients(void) {
+    while(config.liveclients < config.numclients) {
+        createClient();
+    }
+}
+
+static void freeClient(client c) {
+    redisAsyncDisconnect(c->context);
+}
+
+#if 0
 static void checkDataIntegrity(client c) {
     if (c->reqtype == REDIS_GET) {
         size_t l;
@@ -204,53 +213,56 @@ static void checkDataIntegrity(client c) {
         zfree(data);
     }
 }
+#endif
 
-static void resetClient(client c) {
-    aeDeleteFileEvent(config.el,c->fd,AE_WRITABLE);
-    aeDeleteFileEvent(config.el,c->fd,AE_READABLE);
-    aeCreateFileEvent(config.el,c->fd, AE_WRITABLE,writeHandler,c);
-    sdsfree(c->ibuf);
-    c->ibuf = sdsempty();
-    c->mbulk = -1;
-    c->readlen = 0;
-    c->written = 0;
-    c->totreceived = 0;
-    c->state = CLIENT_SENDQUERY;
-    c->start = mstime();
-    c->replytype = REPLY_UNKNOWN;
-    createMissingClients();
-}
+static void handleReply(redisAsyncContext *context, void *_reply, void *privdata) {
+    REDIS_NOTUSED(privdata);
+    redisReply *reply = (redisReply*)_reply;
+    long long latency;
+    client c = (client)context->data;
+    config.donerequests++;
+    latency = mstime() - c->start;
 
-static void prepareClientForReply(client c, int type) {
-    if (type == REPLY_BULK) {
-        c->replytype = REPLY_BULK;
-        c->readlen = -1;
-    } else if (type == REPLY_MBULK) {
-        c->replytype = REPLY_MBULK;
-        c->readlen = -1;
-        c->mbulk = -1;
+    if (latency > MAX_LATENCY) latency = MAX_LATENCY;
+    config.latency[latency]++;
+
+    //if (config.check) checkDataIntegrity(c);
+    assert(reply != NULL);
+    assert(reply->type != REDIS_REPLY_ERROR);
+    freeReplyObject(reply);
+
+    if (config.donerequests >= config.requests || config.ctrlc) {
+        freeClient(c);
+        return;
+    }
+    if (config.keepalive) {
+        issueRequest(c);
     } else {
-        c->replytype = type;
-        c->readlen = 0;
+        config.liveclients--;
+        createMissingClients();
+        config.liveclients++;
+        freeClient(c);
     }
 }
 
-static void prepareClientForQuery(client c) {
+static void issueRequest(client c) {
     long r = random() % 100;
     long key;
     int op = config.optab[r];
-    
+    char keybuf[32];
+
+    c->start = mstime();
     if (config.longtail) {
         key = longtailprng(0,config.keyspace-1,config.longtail_order);
     } else {
         key = random() % config.keyspace;
     }
 
-    sdsfree(c->obuf);
     c->keyid = key;
+    snprintf(keybuf,sizeof(keybuf),"%ld",key);
     if (config.idlemode) {
+        printf("idle!\n");
         c->reqtype = REDIS_IDLE;
-        c->obuf = sdsempty();
     } else if (op == OPTAB_SET) {
         unsigned char *data;
         unsigned long datalen;
@@ -263,11 +275,11 @@ static void prepareClientForQuery(client c) {
         } else {
             datalen = randbetween(config.datasize_min,config.datasize_max);
         }
-        data = zmalloc(datalen+2);
-        c->obuf = sdscatprintf(sdsempty(),"SET key:%ld %lu\r\n",key,datalen);
+
         /* We use the key number as seed of the PRNG, so we'll be able to
          * check if a given key contains the right data later, without the
          * use of additional memory */
+        data = zmalloc(datalen);
         if (config.check) {
             rc4rand_set(data,datalen);
         } else {
@@ -278,9 +290,8 @@ static void prepareClientForQuery(client c) {
                 memset(data,'x',datalen);
             }
         }
-        data[datalen] = '\r';
-        data[datalen+1] = '\n';
-        c->obuf = sdscatlen(c->obuf,data,datalen+2);
+
+        redisAsyncCommand(c->context,handleReply,NULL,"SET key:%s %b",keybuf,data,datalen);
         zfree(data);
     } else if (op == OPTAB_LPUSH) {
         unsigned char *data;
@@ -288,236 +299,36 @@ static void prepareClientForQuery(client c) {
         
         /* Lpush */
         c->reqtype = REDIS_LPUSH;
-        datalen = randbetween(config.datasize_min,config.datasize_max);
-        data = zmalloc(datalen+2);
-        c->obuf = sdscatprintf(sdsempty(),"LPUSH key:%ld %lu\r\n",key,datalen);
 
+        datalen = randbetween(config.datasize_min,config.datasize_max);
+        data = zmalloc(datalen);
         if (config.rand) {
             rc4rand_seed(key);
             rc4rand_set(data,datalen);
         } else {
             memset(data,'x',datalen);
         }
-        data[datalen] = '\r';
-        data[datalen+1] = '\n';
-        c->obuf = sdscatlen(c->obuf,data,datalen+2);
+
+        redisAsyncCommand(c->context,handleReply,NULL,"LPUSH key:%s %b",keybuf,data,datalen);
         zfree(data);
     } else if (op == OPTAB_DEL) {
         /* Del */
         c->reqtype = REDIS_DEL;
-        c->obuf = sdscatprintf(sdsempty(),"DEL key:%ld\r\n",key);
+        redisAsyncCommand(c->context,handleReply,NULL,"DEL key:%s",keybuf);
     } else if (op == OPTAB_SWAPIN) {
         /* Debug Swapin -- useful to stress test the VM subsystem */
         c->reqtype = REDIS_SWAPIN;
-        c->obuf = sdscatprintf(sdsempty(),"DEBUG SWAPIN key:%ld\r\n",key);
+        redisAsyncCommand(c->context,handleReply,NULL,"DEBUG SWAPIN key:%s",keybuf);
     } else if (op == OPTAB_LPOP) {
         /* Lpop */
         c->reqtype = REDIS_LPOP;
-        c->obuf = sdscatprintf(sdsempty(),"LPOP key:%ld\r\n",key);
+        redisAsyncCommand(c->context,handleReply,NULL,"LPOP key:%s",keybuf);
     } else if (op == OPTAB_GET) {
         /* Get */
         c->reqtype = REDIS_GET;
-        c->obuf = sdscatprintf(sdsempty(),"GET key:%ld\r\n",key);
-    }
-}
-
-static void clientDone(client c) {
-    static int last_tot_received = 1;
-
-    long long latency;
-    config.donerequests ++;
-    latency = mstime() - c->start;
-    if (latency > MAX_LATENCY) latency = MAX_LATENCY;
-    config.latency[latency]++;
-
-    if (config.check) checkDataIntegrity(c);
-
-    if (config.debug && last_tot_received != c->totreceived) {
-        printf("Tot bytes received: %d\n", c->totreceived);
-        last_tot_received = c->totreceived;
-    }
-    if (config.donerequests == config.requests || config.ctrlc) {
-        freeClient(c);
-        aeStop(config.el);
-        return;
-    }
-    if (config.keepalive) {
-        resetClient(c);
-        prepareClientForQuery(c);
+        redisAsyncCommand(c->context,handleReply,NULL,"GET key:%s",keybuf);
     } else {
-        config.liveclients--;
-        createMissingClients();
-        config.liveclients++;
-        freeClient(c);
-    }
-}
-
-static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask)
-{
-    char buf[1024];
-    int nread;
-    client c = privdata;
-    REDIS_NOTUSED(el);
-    REDIS_NOTUSED(fd);
-    REDIS_NOTUSED(mask);
-
-    nread = read(c->fd, buf, 1024);
-    if (nread == -1) {
-        fprintf(stderr, "Reading from socket: %s\n", strerror(errno));
-        freeClient(c);
-        return;
-    }
-    if (nread == 0) {
-        fprintf(stderr, "EOF from client\n");
-        freeClient(c);
-        return;
-    }
-    c->totreceived += nread;
-    c->ibuf = sdscatlen(c->ibuf,buf,nread);
-    if (c->replytype == REPLY_UNKNOWN) {
-        int rtype;
-
-        switch(c->ibuf[0]) {
-        case '*': rtype = REPLY_MBULK; break;
-        case '$': rtype = REPLY_BULK; break;
-        case ':': rtype = REPLY_INT; break;
-        default: rtype = REPLY_RETCODE; break;
-        }
-        prepareClientForReply(c,rtype);
-    }
-
-processdata:
-    /* Are we waiting for the first line of the command of for  sdf 
-     * count in bulk or multi bulk operations? */
-    if (c->replytype == REPLY_INT ||
-        c->replytype == REPLY_RETCODE ||
-        (c->replytype == REPLY_BULK && c->readlen == -1) ||
-        (c->replytype == REPLY_MBULK && c->readlen == -1) ||
-        (c->replytype == REPLY_MBULK && c->mbulk == -1)) {
-        char *p;
-
-        /* Check if the first line is complete. This is only true if
-         * there is a newline inside the buffer. */
-        if ((p = strchr(c->ibuf,'\n')) != NULL) {
-            if (c->replytype == REPLY_BULK ||
-                (c->replytype == REPLY_MBULK && c->mbulk != -1))
-            {
-                /* Read the count of a bulk reply (being it a single bulk or
-                 * a multi bulk reply). "$<count>" for the protocol spec. */
-                *p = '\0';
-                *(p-1) = '\0';
-                c->readlen = atoi(c->ibuf+1)+2;
-                /* Handle null bulk reply "$-1" */
-                if (c->readlen-2 == -1) {
-                    clientDone(c);
-                    return;
-                }
-                /* Leave all the rest in the input buffer */
-                c->ibuf = sdsrange(c->ibuf,(p-c->ibuf)+1,-1);
-                /* fall through to reach the point where the code will try
-                 * to check if the bulk reply is complete. */
-            } else if (c->replytype == REPLY_MBULK && c->mbulk == -1) {
-                /* Read the count of a multi bulk reply. That is, how many
-                 * bulk replies we have to read next. "*<count>" protocol. */
-                *p = '\0';
-                *(p-1) = '\0';
-                c->mbulk = atoi(c->ibuf+1);
-                /* Handle null bulk reply "*-1" */
-                if (c->mbulk == -1) {
-                    clientDone(c);
-                    return;
-                }
-                // printf("%p) %d elements list\n", c, c->mbulk);
-                /* Leave all the rest in the input buffer */
-                c->ibuf = sdsrange(c->ibuf,(p-c->ibuf)+1,-1);
-                goto processdata;
-            } else {
-                c->ibuf = sdstrim(c->ibuf,"\r\n");
-                clientDone(c);
-                return;
-            }
-        }
-    }
-    /* bulk read, did we read everything? */
-    if (((c->replytype == REPLY_MBULK && c->mbulk != -1) || 
-         (c->replytype == REPLY_BULK)) && c->readlen != -1 &&
-          (unsigned)c->readlen <= sdslen(c->ibuf))
-    {
-        if (c->replytype == REPLY_BULK) {
-            clientDone(c);
-        } else if (c->replytype == REPLY_MBULK) {
-            if (--c->mbulk == 0) {
-                clientDone(c);
-            } else {
-                c->ibuf = sdsrange(c->ibuf,c->readlen,-1);
-                c->readlen = -1;
-                goto processdata;
-            }
-        }
-    }
-}
-
-static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask)
-{
-    client c = privdata;
-    REDIS_NOTUSED(el);
-    REDIS_NOTUSED(fd);
-    REDIS_NOTUSED(mask);
-
-    if (c->state == CLIENT_CONNECTING) {
-        c->state = CLIENT_SENDQUERY;
-        c->start = mstime();
-    }
-    if (sdslen(c->obuf) > c->written) {
-        void *ptr = c->obuf+c->written;
-        int len = sdslen(c->obuf) - c->written;
-        int nwritten = write(c->fd, ptr, len);
-        if (nwritten == -1) {
-            if (errno != EPIPE)
-                fprintf(stderr, "Writing to socket: %s\n", strerror(errno));
-            freeClient(c);
-            return;
-        }
-        c->written += nwritten;
-        if (sdslen(c->obuf) == c->written) {
-            aeDeleteFileEvent(config.el,c->fd,AE_WRITABLE);
-            aeCreateFileEvent(config.el,c->fd,AE_READABLE,readHandler,c);
-            c->state = CLIENT_READREPLY;
-        }
-    }
-}
-
-static client createClient(void) {
-    client c = zmalloc(sizeof(struct _client));
-    char err[ANET_ERR_LEN];
-
-    c->fd = anetTcpNonBlockConnect(err,config.hostip,config.hostport);
-    if (c->fd == ANET_ERR) {
-        zfree(c);
-        fprintf(stderr,"Connect: %s\n",err);
-        return NULL;
-    }
-    anetTcpNoDelay(NULL,c->fd);
-    c->obuf = sdsempty();
-    c->ibuf = sdsempty();
-    c->mbulk = -1;
-    c->readlen = 0;
-    c->written = 0;
-    c->totreceived = 0;
-    c->state = CLIENT_CONNECTING;
-    c->reqtype = REDIS_IDLE;
-    aeCreateFileEvent(config.el, c->fd, AE_WRITABLE, writeHandler, c);
-    config.liveclients++;
-    listAddNodeTail(config.clients,c);
-    return c;
-}
-
-static void createMissingClients(void) {
-    while(config.liveclients < config.numclients) {
-        client new = createClient();
-        if (!new) continue;
-        prepareClientForQuery(new);
-        prepareClientForReply(new,new->replytype);
+        assert(NULL);
     }
 }
 
@@ -558,7 +369,6 @@ static void prepareForBenchmark(void)
 static void endBenchmark(char *title) {
     config.totlatency = mstime()-config.start;
     showLatencyReport(title);
-    freeAllClients();
 }
 
 static void usage(char *wrong) {
@@ -640,12 +450,7 @@ static void parseOptions(int argc, char **argv) {
             config.keepalive = atoi(argv[i+1]);
             i++;
         } else if (!strcmp(argv[i],"host") && !lastarg) {
-            char *ip = zmalloc(32);
-            if (anetResolve(NULL,argv[i+1],ip) == ANET_ERR) {
-                printf("Can't resolve %s\n", argv[i]);
-                exit(1);
-            }
-            config.hostip = ip;
+            config.hostip = argv[i+1];
             i++;
         } else if (!strcmp(argv[i],"port") && !lastarg) {
             config.hostport = atoi(argv[i+1]);
@@ -730,7 +535,6 @@ static void fillOpTab(int *i, int op, int perc) {
 }
 
 int main(int argc, char **argv) {
-    client c;
     int i;
 
     signal(SIGHUP, SIG_IGN);
@@ -791,9 +595,6 @@ int main(int argc, char **argv) {
     printf("PRNG seed is: %u - use the 'seed' option to reproduce the same sequence\n", config.prngseed);
     do {
         prepareForBenchmark();
-        c = createClient();
-        prepareClientForQuery(c);
-        prepareClientForReply(c,c->replytype);
         createMissingClients();
         aeMain(config.el);
         endBenchmark("Report");
