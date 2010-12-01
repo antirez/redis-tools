@@ -42,11 +42,14 @@
 #define REDIS_NOTUSED(V) ((void) V)
 
 static struct config {
+    aeEventLoop *el;
     int debug;
-    int numclients;
-    int requests;
-    int liveclients;
-    int donerequests;
+    int done;
+    list *clients;
+    int num_clients;
+    int num_requests;
+    int issued_requests;
+
     int datasize_min;
     int datasize_max;
     int keyspace;
@@ -59,14 +62,12 @@ static struct config {
     int rand;
     int longtail;
     int longtail_order;
-    aeEventLoop *el;
     char *hostip;
     int hostport;
     int keepalive;
     long long start;
     long long totlatency;
     int *latency;
-    list *clients;
     int quiet;
     int loop;
     int idlemode;
@@ -137,11 +138,15 @@ static void clientDisconnected(const redisAsyncContext *context, int status) {
         exit(1);
     }
 
-    config.liveclients--;
     ln = listSearchKey(config.clients,c);
     assert(ln != NULL);
     listDelNode(config.clients,ln);
     zfree(c);
+
+    /* The run was not done, create new client(s). */
+    if (!config.done) {
+        createMissingClients();
+    }
 
     /* Stop the event loop when all clients were disconnected */
     if (!listLength(config.clients)) {
@@ -163,20 +168,15 @@ static client createClient(void) {
     }
 
     redisAeAttach(config.el,c->context);
-    config.liveclients++;
     listAddNodeTail(config.clients,c);
     issueRequest(c);
     return c;
 }
 
 static void createMissingClients(void) {
-    while(config.liveclients < config.numclients) {
+    while(listLength(config.clients) < (size_t)config.num_clients) {
         createClient();
     }
-}
-
-static void freeClient(client c) {
-    redisAsyncDisconnect(c->context);
 }
 
 #if 0
@@ -220,7 +220,6 @@ static void handleReply(redisAsyncContext *context, void *_reply, void *privdata
     redisReply *reply = (redisReply*)_reply;
     long long latency;
     client c = (client)context->data;
-    config.donerequests++;
     latency = mstime() - c->start;
 
     if (latency > MAX_LATENCY) latency = MAX_LATENCY;
@@ -231,17 +230,16 @@ static void handleReply(redisAsyncContext *context, void *_reply, void *privdata
     assert(reply->type != REDIS_REPLY_ERROR);
     freeReplyObject(reply);
 
-    if (config.donerequests >= config.requests || config.ctrlc) {
-        freeClient(c);
+    if (config.done || config.ctrlc) {
+        redisAsyncDisconnect(c->context);
         return;
     }
+
     if (config.keepalive) {
         issueRequest(c);
     } else {
-        config.liveclients--;
-        createMissingClients();
-        config.liveclients++;
-        freeClient(c);
+        /* createMissingClients will be called in the disconnection callback */
+        redisAsyncDisconnect(c->context);
     }
 }
 
@@ -250,6 +248,9 @@ static void issueRequest(client c) {
     long key;
     int op = config.optab[r];
     char keybuf[32];
+
+    config.issued_requests++;
+    if (config.issued_requests == config.num_requests) config.done = 1;
 
     c->start = mstime();
     if (config.longtail) {
@@ -336,12 +337,12 @@ static void showLatencyReport(char *title) {
     int j, seen = 0;
     float perc, reqpersec;
 
-    reqpersec = (float)config.donerequests/((float)config.totlatency/1000);
+    reqpersec = (float)config.issued_requests/((float)config.totlatency/1000);
     if (!config.quiet) {
         printf("====== %s ======\n", title);
-        printf("  %d requests completed in %.2f seconds\n", config.donerequests,
+        printf("  %d requests completed in %.2f seconds\n", config.issued_requests,
             (float)config.totlatency/1000);
-        printf("  %d parallel clients\n", config.numclients);
+        printf("  %d parallel clients\n", config.num_clients);
         printf("  %d min bytes payload\n", config.datasize_min);
         printf("  %d max bytes payload\n", config.datasize_max);
         printf("  keep alive: %d\n", config.keepalive);
@@ -349,7 +350,7 @@ static void showLatencyReport(char *title) {
         for (j = 0; j <= MAX_LATENCY; j++) {
             if (config.latency[j]) {
                 seen += config.latency[j];
-                perc = ((float)seen*100)/config.donerequests;
+                perc = ((float)seen*100)/config.issued_requests;
                 printf("%.2f%% <= %d milliseconds\n", perc, j);
             }
         }
@@ -359,11 +360,10 @@ static void showLatencyReport(char *title) {
     }
 }
 
-static void prepareForBenchmark(void)
-{
+static void prepareForBenchmark(void) {
     memset(config.latency,0,sizeof(int)*(MAX_LATENCY+1));
     config.start = mstime();
-    config.donerequests = 0;
+    config.issued_requests = 0;
 }
 
 static void endBenchmark(char *title) {
@@ -426,10 +426,10 @@ static void parseOptions(int argc, char **argv) {
         int lastarg = i==argc-1;
         
         if (!strcmp(argv[i],"clients") && !lastarg) {
-            config.numclients = atoi(argv[i+1]);
+            config.num_clients = atoi(argv[i+1]);
             i++;
         } else if (!strcmp(argv[i],"requests") && !lastarg) {
-            config.requests = atoi(argv[i+1]);
+            config.num_requests = atoi(argv[i+1]);
             i++;
         } else if (!strcmp(argv[i],"set") && !lastarg) {
             config.set_perc = atoi(argv[i+1]);
@@ -472,10 +472,10 @@ static void parseOptions(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i],"big")) {
             config.keyspace = 1000000;
-            config.requests = 1000000;
+            config.num_requests = 1000000;
         } else if (!strcmp(argv[i],"verybig")) {
             config.keyspace = 10000000;
-            config.requests = 10000000;
+            config.num_requests = 10000000;
         } else if (!strcmp(argv[i],"quiet")) {
             config.quiet = 1;
         } else if (!strcmp(argv[i],"check")) {
@@ -540,18 +540,20 @@ int main(int argc, char **argv) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
 
-    config.debug = 0;
-    config.numclients = 50;
-    config.requests = 10000;
-    config.liveclients = 0;
     config.el = aeCreateEventLoop();
+    config.debug = 0;
+    config.done = 0;
+    config.clients = listCreate();
+    config.num_clients = 50;
+    config.num_requests = 10000;
+    config.issued_requests = 0;
+
     config.keepalive = 1;
     config.set_perc = 50;
     config.del_perc = 0;
     config.swapin_perc = 0;
     config.lpush_perc = 0;
     config.lpop_perc = 0;
-    config.donerequests = 0;
     config.datasize_min = 1;
     config.datasize_max = 64;
     config.keyspace = DEFAULT_KEYSPACE; /* 100k */
@@ -562,7 +564,6 @@ int main(int argc, char **argv) {
     config.loop = 0;
     config.idlemode = 0;
     config.latency = NULL;
-    config.clients = listCreate();
     config.latency = zmalloc(sizeof(int)*(MAX_LATENCY+1));
     config.ctrlc = 0;
     config.prngseed = (unsigned int) (mstime()^getpid());
@@ -577,7 +578,7 @@ int main(int argc, char **argv) {
     }
 
     if (config.idlemode) {
-        printf("Creating %d idle connections and waiting forever (Ctrl+C when done)\n", config.numclients);
+        printf("Creating %d idle connections and waiting forever (Ctrl+C when done)\n", config.num_clients);
     }
 
     /* Setup the operation table. Start with a table with just GETs operations
