@@ -89,9 +89,8 @@ static void overview(redisContext *c) {
 
         if ((i++ % 20) == 0) {
             printf(
-" ------- data ------ ------------ load ----------------------------- - childs -\n");
-            printf(
-" keys      used-mem  clients blpops  requests            connections\n");
+"------- data ------ --------------------- load -------------------- - child -\n"
+"keys       mem      clients blocked requests            connections          \n");
         }
 
         /* Keys */
@@ -105,12 +104,12 @@ static void overview(redisContext *c) {
             aux += k;
         }
         sprintf(buf,"%ld",aux);
-        printf(" %-10s",buf);
+        printf("%-11s",buf);
 
         /* Used memory */
         aux = getLongInfoField(reply->str,"used_memory");
         bytesToHuman(buf,aux);
-        printf("%-9s",buf);
+        printf("%-8s",buf);
 
         /* Clients */
         aux = getLongInfoField(reply->str,"connected_clients");
@@ -139,13 +138,13 @@ static void overview(redisContext *c) {
         switch(aux) {
         case 0: break;
         case 1:
-            printf("BGSAVE");
+            printf("SAVE");
             break;
         case 2:
-            printf("AOFREWRITE");
+            printf("AOF");
             break;
         case 3:
-            printf("BGSAVE+AOF");
+            printf("SAVE+AOF");
             break;
         }
 
