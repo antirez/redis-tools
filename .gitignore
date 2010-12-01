@@ -1,0 +1,4 @@
+*.o
+/redis-load
+/redis-stat
+
