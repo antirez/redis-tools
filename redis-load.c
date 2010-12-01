@@ -516,9 +516,10 @@ static void ctrlc(int sig) {
 
     config.ctrlc++;
     if (config.ctrlc == 1) {
-        printf("Ctrl+C, return as soon as the running requests terminate\n");
+        config.done = 1;
+        printf("\nWaiting for pending requests to complete...\n");
     } else {
-        printf("If you insist... exiting\n");
+        printf("\nForcing exit...\n");
         exit(1);
     }
 }
