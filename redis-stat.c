@@ -18,6 +18,7 @@
 #include <limits.h>
 #include <math.h>
 #include <sys/time.h>
+#include <assert.h>
 
 #include "zmalloc.h"
 #include "hiredis.h"
@@ -35,6 +36,7 @@
 static struct config {
     char *hostip;
     int hostport;
+    redisContext *context;
     int delay;
     int stat; /* The kind of output to produce: STAT_* */
     int samplesize;
@@ -72,7 +74,36 @@ static long getLongInfoField(char *info, char *field) {
     return l;
 }
 
-static void overview(redisContext *c) {
+static redisReply *infoCommand() {
+    redisContext *c = config.context;
+    redisReply *reply = NULL;
+    int tries = 0;
+
+    assert(!c->err);
+    while(reply == NULL) {
+        while (c->err & (REDIS_ERR_IO | REDIS_ERR_EOF)) {
+            printf("Reconnecting (%d)...\r", ++tries);
+            fflush(stdout);
+
+            redisFree(c);
+            c = redisConnect(config.hostip,config.hostport);
+            usleep(config.delay*1000);
+        }
+
+        reply = redisCommand(c,"INFO");
+        if (c->err && !(c->err & (REDIS_ERR_IO | REDIS_ERR_EOF))) {
+            printf("ERROR: %s\n", c->errstr);
+            exit(1);
+        } else if (tries > 0) {
+            printf("\n");
+        }
+    }
+
+    config.context = c;
+    return reply;
+}
+
+static void overview() {
     redisReply *reply;
     long aux, requests = 0;
     int i = 0;
@@ -81,7 +112,7 @@ static void overview(redisContext *c) {
         char buf[64];
         int j;
 
-        reply = redisCommand(c,"INFO");
+        reply = infoCommand();
         if (reply->type == REDIS_REPLY_ERROR) {
             printf("ERROR: %s\n", reply->str);
             exit(1);
@@ -154,7 +185,7 @@ static void overview(redisContext *c) {
     }
 }
 
-static void vmstat(redisContext *c) {
+static void vmstat() {
     redisReply *reply;
     long aux, pagein = 0, pageout = 0, usedpages = 0, usedmemory = 0;
     long swapped = 0;
@@ -163,7 +194,7 @@ static void vmstat(redisContext *c) {
     while(1) {
         char buf[64];
 
-        reply = redisCommand(c,"INFO");
+        reply = infoCommand();
         if (reply->type == REDIS_REPLY_ERROR) {
             printf("ERROR: %s\n", reply->str);
             exit(1);
@@ -232,7 +263,8 @@ static void vmstat(redisContext *c) {
     }
 }
 
-size_t getSerializedLen(redisContext *c, char *key) {
+size_t getSerializedLen(char *key) {
+    redisContext *c = config.context;
     redisReply *reply;
     size_t sl = 0;
     char *p;
@@ -328,7 +360,8 @@ return s;
  * as Redis will use one bit of RAM for every page in the swap file, so we
  * want to optimized page size while the number of pages is taken fixed. */
 #define VMPAGE_PAGES 1000000
-static void vmpage(redisContext *c) {
+static void vmpage() {
+    redisContext *c = config.context;
     int j, pagesize, bestpagesize = 0;
     double bestscore = 0;
     size_t *samples;
@@ -459,7 +492,8 @@ static void samplesToGraph(size_t *samples, int scaletype) {
     zfree(samples);
 }
 
-static void ondiskSize(redisContext *c) {
+static void ondiskSize() {
+    redisContext *c = config.context;
     size_t *samples;
 
     samples = sampleDataset(c,SAMPLE_SERIALIZEDLEN);
@@ -470,7 +504,8 @@ static void ondiskSize(redisContext *c) {
     }
 }
 
-static void latency(redisContext *c) {
+static void latency() {
+    redisContext *c = config.context;
     redisReply *reply;
     long long start;
     int seq = 1;
@@ -565,7 +600,7 @@ int main(int argc, char **argv) {
 
     parseOptions(argc,argv);
 
-    c = redisConnect(config.hostip,config.hostport);
+    c = config.context = redisConnect(config.hostip,config.hostport);
     if (c->err) {
         printf("Error connecting to Redis: %s\n", c->errstr);
         redisFree(c);
@@ -574,19 +609,19 @@ int main(int argc, char **argv) {
 
     switch(config.stat) {
     case STAT_VMSTAT:
-        vmstat(c);
+        vmstat();
         break;
     case STAT_VMPAGE:
-        vmpage(c);
+        vmpage();
         break;
     case STAT_OVERVIEW:
-        overview(c);
+        overview();
         break;
     case STAT_ONDISK_SIZE:
-        ondiskSize(c);
+        ondiskSize();
         break;
     case STAT_LATENCY:
-        latency(c);
+        latency();
         break;
     }
     return 0;
