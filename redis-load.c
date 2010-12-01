@@ -211,6 +211,11 @@ static void handleReply(redisAsyncContext *context, void *_reply, void *privdata
     client c = (client)context->data;
     latency = mstime() - c->start;
 
+    if (reply == NULL && context->err) {
+        fprintf(stderr,"Error: %s\n", context->errstr);
+        exit(1);
+    }
+
     if (latency > MAX_LATENCY) latency = MAX_LATENCY;
     config.latency[latency]++;
 
