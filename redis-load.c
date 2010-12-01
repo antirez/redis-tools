@@ -179,41 +179,30 @@ static void createMissingClients(void) {
     }
 }
 
-#if 0
-static void checkDataIntegrity(client c) {
-    if (c->reqtype == REDIS_GET) {
-        size_t l;
+static void checkDataIntegrity(client c, redisReply *reply) {
+    if (c->reqtype == REDIS_GET && reply->type == REDIS_REPLY_STRING) {
         unsigned char *data;
-        unsigned long datalen;
-
-        l = sdslen(c->ibuf);
-        if (l == 5 &&
-            c->ibuf[0] == '$' && c->ibuf[1] == '-' && c->ibuf[2] == '1')
-            return;
+        unsigned int datalen;
 
         rc4rand_seed(c->keyid);
         datalen = rc4rand_between(config.datasize_min,config.datasize_max);
-        data = zmalloc(datalen+3);
+        data = zmalloc(datalen);
         rc4rand_set(data,datalen);
-        data[datalen] = '\r';
-        data[datalen+1] = '\n';
-        data[datalen+2] = '\0';
 
-        if (l && l-2 != datalen) {
+        if (reply->len != (int)datalen) {
             printf("*** Len mismatch for KEY key:%ld\n", c->keyid);
-            printf("*** %lu instead of %lu\n", l, datalen);
-            printf("*** '%s' instead of '%s'\n", c->ibuf, data);
+            printf("*** %d instead of %d\n", reply->len, datalen);
+            printf("*** '%s' instead of '%s'\n", reply->str, data);
             exit(1);
         }
-        if (memcmp(data,c->ibuf,datalen) != 0) {
+        if (memcmp(reply->str,data,datalen) != 0) {
             printf("*** Data mismatch for KEY key:%ld\n", c->keyid);
-            printf("*** '%s' instead of '%s'\n", c->ibuf, data);
+            printf("*** '%s' instead of '%s'\n", reply->str, data);
             exit(1);
         }
         zfree(data);
     }
 }
-#endif
 
 static void handleReply(redisAsyncContext *context, void *_reply, void *privdata) {
     REDIS_NOTUSED(privdata);
@@ -225,9 +214,8 @@ static void handleReply(redisAsyncContext *context, void *_reply, void *privdata
     if (latency > MAX_LATENCY) latency = MAX_LATENCY;
     config.latency[latency]++;
 
-    //if (config.check) checkDataIntegrity(c);
-    assert(reply != NULL);
-    assert(reply->type != REDIS_REPLY_ERROR);
+    assert(reply != NULL && reply->type != REDIS_REPLY_ERROR);
+    if (config.check) checkDataIntegrity(c,reply);
     freeReplyObject(reply);
 
     if (config.done || config.ctrlc) {
