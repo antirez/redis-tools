@@ -74,7 +74,7 @@ static long getLongInfoField(char *info, char *field) {
     return l;
 }
 
-static redisReply *infoCommand() {
+static redisReply *reconnectingCommand(const char *cmd) {
     redisContext *c = config.context;
     redisReply *reply = NULL;
     int tries = 0;
@@ -90,7 +90,7 @@ static redisReply *infoCommand() {
             usleep(config.delay*1000);
         }
 
-        reply = redisCommand(c,"INFO");
+        reply = redisCommand(c,cmd);
         if (c->err && !(c->err & (REDIS_ERR_IO | REDIS_ERR_EOF))) {
             printf("ERROR: %s\n", c->errstr);
             exit(1);
@@ -112,7 +112,7 @@ static void overview() {
         char buf[64];
         int j;
 
-        reply = infoCommand();
+        reply = reconnectingCommand("INFO");
         if (reply->type == REDIS_REPLY_ERROR) {
             printf("ERROR: %s\n", reply->str);
             exit(1);
@@ -194,7 +194,7 @@ static void vmstat() {
     while(1) {
         char buf[64];
 
-        reply = infoCommand();
+        reply = reconnectingCommand("INFO");
         if (reply->type == REDIS_REPLY_ERROR) {
             printf("ERROR: %s\n", reply->str);
             exit(1);
@@ -259,6 +259,20 @@ static void vmstat() {
 
         printf("\n");
         freeReplyObject(reply);
+        usleep(config.delay*1000);
+    }
+}
+
+static void latency() {
+    redisReply *reply;
+    long long start;
+    int seq = 1;
+
+    while(1) {
+        start = microseconds();
+        reply = reconnectingCommand("PING");
+        freeReplyObject(reply);
+        printf("%d: %.2f ms\n",seq++,(double)(microseconds()-start)/1000);
         usleep(config.delay*1000);
     }
 }
@@ -501,29 +515,6 @@ static void ondiskSize() {
         samplesToGraph(samples, SCALE_POWEROFTWO);
     } else {
         samplesToGraph(samples, SCALE_LINEAR_AUTO);
-    }
-}
-
-static void latency() {
-    redisContext *c = config.context;
-    redisReply *reply;
-    long long start;
-    int seq = 1;
-
-    while(1) {
-        start = microseconds();
-
-        reply = redisCommand(c,"PING");
-        if (reply == NULL) {
-            printf("%s\n", c->errstr);
-            exit(1);
-        } else {
-            freeReplyObject(reply);
-            printf("%d: %.2f ms\n",seq,(double)(microseconds()-start)/1000);
-        }
-
-        usleep(config.delay*1000);
-        seq++;
     }
 }
 
