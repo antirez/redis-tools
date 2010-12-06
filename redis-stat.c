@@ -22,7 +22,6 @@
 
 #include "zmalloc.h"
 #include "hiredis.h"
-#include "anet.h"
 #include "utils.h"
 
 #define REDIS_NOTUSED(V) ((void) V)

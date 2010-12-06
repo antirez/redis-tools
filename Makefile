@@ -14,8 +14,8 @@ endif
 CCOPT= $(CFLAGS) $(CCLINK) $(ARCH) $(PROF)
 DEBUG?= -g -rdynamic -ggdb 
 
-LOADOBJ = ae.o anet.o redis-load.o adlist.o zmalloc.o rc4rand.o
-STATOBJ = anet.o redis-stat.o zmalloc.o utils.o
+LOADOBJ = ae.o adlist.o redis-load.o zmalloc.o rc4rand.o utils.o
+STATOBJ = redis-stat.o zmalloc.o utils.o
 
 LOADPRGNAME = redis-load
 STATPRGNAME = redis-stat
@@ -24,16 +24,10 @@ all: redis-load redis-stat
 
 # Deps (use make dep to generate this)
 adlist.o: adlist.c adlist.h zmalloc.h
-ae.o: ae.c ae.h zmalloc.h config.h ae_kqueue.c
-ae_epoll.o: ae_epoll.c
-ae_kqueue.o: ae_kqueue.c
-ae_select.o: ae_select.c
-anet.o: anet.c fmacros.h anet.h
+ae.o: ae.c ae.h zmalloc.h config.h ae_epoll.c ae_kqueue.c ae_select.c
 rc4rand.o: rc4rand.c
-redis-load.o: redis-load.c fmacros.h ae.h anet.h sds.h adlist.h zmalloc.h \
-  rc4rand.h
-redis-stat.o: redis-stat.c fmacros.h anet.h sds.h zmalloc.h
-sds.o: sds.c sds.h zmalloc.h
+redis-load.o: redis-load.c fmacros.h ae.h adlist.h zmalloc.h rc4rand.h
+redis-stat.o: redis-stat.c fmacros.h zmalloc.h
 zmalloc.o: zmalloc.c config.h
 utils.o: utils.c utils.h
 
