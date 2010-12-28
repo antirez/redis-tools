@@ -1,5 +1,7 @@
 /*
  * Copyright (c) 2009-2010, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2010, Pieter Noordhuis <pcnoordhuis at gmail dot com>
+ *
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,16 +40,27 @@ void __redisAppendCommand(redisContext *c, char *cmd, size_t len);
 
 static redisAsyncContext *redisAsyncInitialize(redisContext *c) {
     redisAsyncContext *ac = realloc(c,sizeof(redisAsyncContext));
+    c = &(ac->c);
+
+    /* The regular connect functions will always set the flag REDIS_CONNECTED.
+     * For the async API, we want to wait until the first write event is
+     * received up before setting this flag, so reset it here. */
+    c->flags &= ~REDIS_CONNECTED;
+
     ac->err = 0;
     ac->errstr = NULL;
     ac->data = NULL;
     ac->_adapter_data = NULL;
+
     ac->evAddRead = NULL;
     ac->evDelRead = NULL;
     ac->evAddWrite = NULL;
     ac->evDelWrite = NULL;
     ac->evCleanup = NULL;
+
+    ac->onConnect = NULL;
     ac->onDisconnect = NULL;
+
     ac->replies.head = NULL;
     ac->replies.tail = NULL;
     return ac;
@@ -78,6 +91,14 @@ redisAsyncContext *redisAsyncConnectUnix(const char *path) {
 int redisAsyncSetReplyObjectFunctions(redisAsyncContext *ac, redisReplyObjectFunctions *fn) {
     redisContext *c = &(ac->c);
     return redisSetReplyObjectFunctions(c,fn);
+}
+
+int redisAsyncSetConnectCallback(redisAsyncContext *ac, redisConnectCallback *fn) {
+    if (ac->onConnect == NULL) {
+        ac->onConnect = fn;
+        return REDIS_OK;
+    }
+    return REDIS_ERR;
 }
 
 int redisAsyncSetDisconnectCallback(redisAsyncContext *ac, redisDisconnectCallback *fn) {
@@ -235,8 +256,14 @@ void redisAsyncHandleWrite(redisAsyncContext *ac) {
             if (ac->evDelWrite) ac->evDelWrite(ac->_adapter_data);
         }
 
-        /* Always schedule reads when something was written */
+        /* Always schedule reads after writes */
         if (ac->evAddRead) ac->evAddRead(ac->_adapter_data);
+
+        /* Fire onConnect when this is the first write event. */
+        if (!(c->flags & REDIS_CONNECTED)) {
+            c->flags |= REDIS_CONNECTED;
+            if (ac->onConnect) ac->onConnect(ac);
+        }
     }
 }
 

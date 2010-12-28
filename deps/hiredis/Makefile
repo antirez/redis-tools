@@ -6,32 +6,35 @@ OBJ = net.o hiredis.o sds.o async.o
 BINS = hiredis-example hiredis-test
 
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
-OPTIMIZATION?=-O2
+OPTIMIZATION?=-O3
 ifeq ($(uname_S),SunOS)
-  CFLAGS?= -std=c99 -pedantic $(OPTIMIZATION) -fPIC -Wall -W -D__EXTENSIONS__ -D_XPG6
-  CCLINK?= -ldl -lnsl -lsocket -lm -lpthread
+  CFLAGS?=-std=c99 -pedantic $(OPTIMIZATION) -fPIC -Wall -W -D__EXTENSIONS__ -D_XPG6 $(ARCH) $(PROF)
+  CCLINK?=-ldl -lnsl -lsocket -lm -lpthread
+  LDFLAGS?=-L. -Wl,-R,.
   DYLIBNAME?=libhiredis.so
-  DYLIB_MAKE_CMD?=gcc -shared -Wl,-soname,${DYLIBNAME} -o ${DYLIBNAME} ${OBJ}
+  DYLIB_MAKE_CMD?=$(CC) -G -o ${DYLIBNAME} ${OBJ}
   STLIBNAME?=libhiredis.a
   STLIB_MAKE_CMD?=ar rcs ${STLIBNAME} ${OBJ}
 else ifeq ($(uname_S),Darwin)
-  CFLAGS?= -std=c99 -pedantic $(OPTIMIZATION) -fPIC -Wall -W -Wwrite-strings $(ARCH) $(PROF)
-  CCLINK?= -lm -pthread
-  OBJARCH?= -arch i386 -arch x86_64
+  CFLAGS?=-std=c99 -pedantic $(OPTIMIZATION) -fPIC -Wall -W -Wwrite-strings $(ARCH) $(PROF)
+  CCLINK?=-lm -pthread
+  LDFLAGS?=-L. -Wl,-rpath,.
+  OBJARCH?=-arch i386 -arch x86_64
   DYLIBNAME?=libhiredis.dylib
   DYLIB_MAKE_CMD?=libtool -dynamic -o ${DYLIBNAME} -lm ${DEBUG} - ${OBJ}
   STLIBNAME?=libhiredis.a
   STLIB_MAKE_CMD?=libtool -static -o ${STLIBNAME} - ${OBJ}
 else
-  CFLAGS?= -std=c99 -pedantic $(OPTIMIZATION) -fPIC -Wall -W -Wwrite-strings $(ARCH) $(PROF)
-  CCLINK?= -lm -pthread
+  CFLAGS?=-std=c99 -pedantic $(OPTIMIZATION) -fPIC -Wall -W -Wwrite-strings $(ARCH) $(PROF)
+  CCLINK?=-lm -pthread
+  LDFLAGS?=-L. -Wl,-rpath,.
   DYLIBNAME?=libhiredis.so
   DYLIB_MAKE_CMD?=gcc -shared -Wl,-soname,${DYLIBNAME} -o ${DYLIBNAME} ${OBJ}
   STLIBNAME?=libhiredis.a
   STLIB_MAKE_CMD?=ar rcs ${STLIBNAME} ${OBJ}
 endif
-CCOPT= $(CFLAGS) $(CCLINK) $(ARCH) $(PROF)
-DEBUG?= -g -ggdb 
+CCOPT= $(CFLAGS) $(CCLINK)
+DEBUG?= -g -ggdb
 
 PREFIX?= /usr/local
 INSTALL_INC= $(PREFIX)/include/hiredis
@@ -59,10 +62,10 @@ static: ${STLIBNAME}
 
 # Binaries:
 hiredis-example-libevent: example-libevent.c adapters/libevent.h ${DYLIBNAME}
-	$(CC) -o $@ $(CCOPT) $(DEBUG) -L. -lhiredis -levent -Wl,-rpath,. example-libevent.c
+	$(CC) -o $@ $(CCOPT) $(DEBUG) $(LDFLAGS) -lhiredis -levent example-libevent.c
 
 hiredis-example-libev: example-libev.c adapters/libev.h ${DYLIBNAME}
-	$(CC) -o $@ $(CCOPT) $(DEBUG) -L. -lhiredis -lev -Wl,-rpath,. example-libev.c
+	$(CC) -o $@ $(CCOPT) $(DEBUG) $(LDFLAGS) -lhiredis -lev example-libev.c
 
 ifndef AE_DIR
 hiredis-example-ae:
@@ -70,11 +73,11 @@ hiredis-example-ae:
 	@false
 else
 hiredis-example-ae: example-ae.c adapters/ae.h ${DYLIBNAME}
-	$(CC) -o $@ $(CCOPT) $(DEBUG) -I$(AE_DIR) -L. -lhiredis -Wl,-rpath,. example-ae.c $(AE_DIR)/ae.o $(AE_DIR)/zmalloc.o
+	$(CC) -o $@ $(CCOPT) $(DEBUG) -I$(AE_DIR) $(LDFLAGS) -lhiredis example-ae.c $(AE_DIR)/ae.o $(AE_DIR)/zmalloc.o
 endif
 
 hiredis-%: %.o ${DYLIBNAME}
-	$(CC) -o $@ $(CCOPT) $(DEBUG) -L. -lhiredis -Wl,-rpath,. $<
+	$(CC) -o $@ $(CCOPT) $(DEBUG) $(LDFLAGS) -lhiredis $<
 
 test: hiredis-test
 	./hiredis-test
@@ -97,13 +100,13 @@ install: ${DYLIBNAME} ${STLIBNAME}
 	@echo ""
 	@echo "WARNING: if it fails under Linux you probably need to install libc6-dev-i386"
 	@echo ""
-	make ARCH="-m32"
+	$(MAKE) ARCH="-m32"
 
 gprof:
-	make PROF="-pg"
+	$(MAKE) PROF="-pg"
 
 gcov:
-	make PROF="-fprofile-arcs -ftest-coverage"
+	$(MAKE) PROF="-fprofile-arcs -ftest-coverage"
 
 noopt:
-	make OPTIMIZATION=""
+	$(MAKE) OPTIMIZATION=""

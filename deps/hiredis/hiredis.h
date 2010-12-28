@@ -1,5 +1,7 @@
 /*
  * Copyright (c) 2009-2010, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2010, Pieter Noordhuis <pcnoordhuis at gmail dot com>
+ *
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,7 +36,7 @@
 
 #define HIREDIS_MAJOR 0
 #define HIREDIS_MINOR 9
-#define HIREDIS_PATCH 1
+#define HIREDIS_PATCH 2
 
 #define REDIS_ERR -1
 #define REDIS_OK 0
@@ -62,12 +64,12 @@
  * should be terminated once all replies have been read. */
 #define REDIS_DISCONNECTING 0x4
 
-#define REDIS_REPLY_ERROR 0
 #define REDIS_REPLY_STRING 1
 #define REDIS_REPLY_ARRAY 2
 #define REDIS_REPLY_INTEGER 3
 #define REDIS_REPLY_NIL 4
 #define REDIS_REPLY_STATUS 5
+#define REDIS_REPLY_ERROR 6
 
 #ifdef __cplusplus
 extern "C" {
