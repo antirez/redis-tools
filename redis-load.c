@@ -276,7 +276,7 @@ static void issueRequest(client c) {
     c->reqtype = op;
 
     if (op == REDIS_IDLE) {
-        printf("idle!\n");
+        /* Idle */
     } else if (op == REDIS_SET) {
         datalen = randomData(key);
         redisAsyncCommand(c->context,handleReply,NULL,"SET string:%ld %b",key,config.databuf,datalen);
@@ -500,13 +500,17 @@ static void parseOptions(int argc, char **argv) {
 static void ctrlc(int sig) {
     REDIS_NOTUSED(sig);
 
-    config.ctrlc++;
-    if (config.ctrlc == 1) {
-        config.done = 1;
-        printf("\nWaiting for pending requests to complete...\n");
-    } else {
-        printf("\nForcing exit...\n");
+    if (config.idlemode) {
         exit(1);
+    } else {
+        config.ctrlc++;
+        if (config.ctrlc == 1) {
+            config.done = 1;
+            printf("\nWaiting for pending requests to complete...\n");
+        } else {
+            printf("\nForcing exit...\n");
+            exit(1);
+        }
     }
 }
 
