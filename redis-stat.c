@@ -91,7 +91,7 @@ static redisReply *reconnectingCommand(const char *cmd) {
 
         reply = redisCommand(c,cmd);
         if (c->err && !(c->err & (REDIS_ERR_IO | REDIS_ERR_EOF))) {
-            printf("ERROR: %s\n", c->errstr);
+            fprintf(stderr, "Error: %s\n", c->errstr);
             exit(1);
         } else if (tries > 0) {
             printf("\n");
@@ -195,13 +195,13 @@ static void vmstat() {
 
         reply = reconnectingCommand("INFO");
         if (reply->type == REDIS_REPLY_ERROR) {
-            printf("ERROR: %s\n", reply->str);
+            fprintf(stderr, "Error: %s\n", reply->str);
             exit(1);
         }
 
         aux = getLongInfoField(reply->str,"vm_enabled");
         if (aux == LONG_MIN || aux == 0) {
-            printf("ERROR: Redis instance has VM disabled\n");
+            fprintf(stderr, "Error: Redis instance has VM disabled\n");
             exit(1);
         }
 
@@ -592,8 +592,7 @@ int main(int argc, char **argv) {
 
     c = config.context = redisConnect(config.hostip,config.hostport);
     if (c->err) {
-        printf("Error connecting to Redis: %s\n", c->errstr);
-        redisFree(c);
+        fprintf(stderr, "Error connecting to Redis: %s\n", c->errstr);
         exit(1);
     }
 

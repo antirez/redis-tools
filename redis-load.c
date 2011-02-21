@@ -128,7 +128,7 @@ static void clientDisconnected(const redisAsyncContext *context, int status) {
     client c = (client)context->data;
 
     if (status != REDIS_OK) {
-        printf("Non-ok disconnect (TODO)\n");
+        fprintf(stderr,"Disconnected: %s\n",c->context->errstr);
         exit(1);
     }
 
@@ -156,8 +156,6 @@ static client createClient(void) {
     redisAsyncSetDisconnectCallback(c->context,clientDisconnected);
     if (c->context->err) {
         fprintf(stderr,"Connect: %s\n",c->context->errstr);
-        redisFree((redisContext*)c->context);
-        zfree(c);
         exit(1);
     }
 
@@ -184,14 +182,14 @@ static void checkDataIntegrity(client c, redisReply *reply) {
         rc4rand_set(data,datalen);
 
         if (reply->len != (int)datalen) {
-            printf("*** Len mismatch for KEY key:%ld\n", c->keyid);
-            printf("*** %d instead of %d\n", reply->len, datalen);
-            printf("*** '%s' instead of '%s'\n", reply->str, data);
+            fprintf(stderr, "*** Len mismatch for KEY key:%ld\n", c->keyid);
+            fprintf(stderr, "*** %d instead of %d\n", reply->len, datalen);
+            fprintf(stderr, "*** '%s' instead of '%s'\n", reply->str, data);
             exit(1);
         }
         if (memcmp(reply->str,data,datalen) != 0) {
-            printf("*** Data mismatch for KEY key:%ld\n", c->keyid);
-            printf("*** '%s' instead of '%s'\n", reply->str, data);
+            fprintf(stderr, "*** Data mismatch for KEY key:%ld\n", c->keyid);
+            fprintf(stderr, "*** '%s' instead of '%s'\n", reply->str, data);
             exit(1);
         }
         zfree(data);
