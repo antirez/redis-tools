@@ -258,7 +258,6 @@ static unsigned long randomData(long seed) {
 static void issueRequest(client c) {
     int op = config.optab[random() % 100];
     long key, hashkey;
-    char keybuf[32];
     unsigned long datalen;
 
     config.issued_requests++;
@@ -276,28 +275,29 @@ static void issueRequest(client c) {
     c->keyid = key;
     c->reqtype = op;
 
-    snprintf(keybuf,sizeof(keybuf),"%ld",key);
     if (op == REDIS_IDLE) {
         printf("idle!\n");
     } else if (op == REDIS_SET) {
         datalen = randomData(key);
-        redisAsyncCommand(c->context,handleReply,NULL,"SET key:%s %b",keybuf,config.databuf,datalen);
+        redisAsyncCommand(c->context,handleReply,NULL,"SET key:%ld %b",key,config.databuf,datalen);
     } else if (op == REDIS_GET) {
-        redisAsyncCommand(c->context,handleReply,NULL,"GET key:%s",keybuf);
+        redisAsyncCommand(c->context,handleReply,NULL,"GET key:%ld",key);
     } else if (op == REDIS_DEL) {
-        redisAsyncCommand(c->context,handleReply,NULL,"DEL key:%s",keybuf);
+        redisAsyncCommand(c->context,handleReply,NULL,"DEL key:%ld",key);
     } else if (op == REDIS_LPUSH) {
         datalen = randomData(key);
-        redisAsyncCommand(c->context,handleReply,NULL,"LPUSH key:%s %b",keybuf,config.databuf,datalen);
+        redisAsyncCommand(c->context,handleReply,NULL,"LPUSH key:%ld %b",key,config.databuf,datalen);
     } else if (op == REDIS_LPOP) {
-        redisAsyncCommand(c->context,handleReply,NULL,"LPOP key:%s",keybuf);
+        redisAsyncCommand(c->context,handleReply,NULL,"LPOP key:%ld",key);
     } else if (op == REDIS_HSET) {
         datalen = randomData(key);
-        redisAsyncCommand(c->context,handleReply,NULL,"HSET key:%s key:%ld %b",keybuf,hashkey,config.databuf,datalen);
+        redisAsyncCommand(c->context,handleReply,NULL,"HSET key:%ld key:%ld %b",key,hashkey,config.databuf,datalen);
     } else if (op == REDIS_HGET) {
-        redisAsyncCommand(c->context,handleReply,NULL,"HGET key:%s key:%ld",keybuf,hashkey);
+        redisAsyncCommand(c->context,handleReply,NULL,"HGET key:%ld key:%ld",key,hashkey);
+    } else if (op == REDIS_HGETALL) {
+        redisAsyncCommand(c->context,handleReply,NULL,"HGETALL key:%ld",key);
     } else if (op == REDIS_SWAPIN) {
-        redisAsyncCommand(c->context,handleReply,NULL,"DEBUG SWAPIN key:%s",keybuf);
+        redisAsyncCommand(c->context,handleReply,NULL,"DEBUG SWAPIN key:%ld",key);
     } else {
         assert(NULL);
     }
