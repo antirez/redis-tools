@@ -261,7 +261,6 @@ static void issueRequest(client c) {
         unsigned char *data;
         unsigned long datalen;
         
-        /* Set */
         c->reqtype = REDIS_SET;
         if (config.check) {
             rc4rand_seed(key);
@@ -287,11 +286,16 @@ static void issueRequest(client c) {
 
         redisAsyncCommand(c->context,handleReply,NULL,"SET key:%s %b",keybuf,data,datalen);
         zfree(data);
+    } else if (op == OPTAB_GET) {
+        c->reqtype = REDIS_GET;
+        redisAsyncCommand(c->context,handleReply,NULL,"GET key:%s",keybuf);
+    } else if (op == OPTAB_DEL) {
+        c->reqtype = REDIS_DEL;
+        redisAsyncCommand(c->context,handleReply,NULL,"DEL key:%s",keybuf);
     } else if (op == OPTAB_LPUSH) {
         unsigned char *data;
         unsigned long datalen;
         
-        /* Lpush */
         c->reqtype = REDIS_LPUSH;
 
         datalen = randbetween(config.datasize_min,config.datasize_max);
@@ -305,22 +309,12 @@ static void issueRequest(client c) {
 
         redisAsyncCommand(c->context,handleReply,NULL,"LPUSH key:%s %b",keybuf,data,datalen);
         zfree(data);
-    } else if (op == OPTAB_DEL) {
-        /* Del */
-        c->reqtype = REDIS_DEL;
-        redisAsyncCommand(c->context,handleReply,NULL,"DEL key:%s",keybuf);
-    } else if (op == OPTAB_SWAPIN) {
-        /* Debug Swapin -- useful to stress test the VM subsystem */
-        c->reqtype = REDIS_SWAPIN;
-        redisAsyncCommand(c->context,handleReply,NULL,"DEBUG SWAPIN key:%s",keybuf);
     } else if (op == OPTAB_LPOP) {
-        /* Lpop */
         c->reqtype = REDIS_LPOP;
         redisAsyncCommand(c->context,handleReply,NULL,"LPOP key:%s",keybuf);
-    } else if (op == OPTAB_GET) {
-        /* Get */
-        c->reqtype = REDIS_GET;
-        redisAsyncCommand(c->context,handleReply,NULL,"GET key:%s",keybuf);
+    } else if (op == OPTAB_SWAPIN) {
+        c->reqtype = REDIS_SWAPIN;
+        redisAsyncCommand(c->context,handleReply,NULL,"DEBUG SWAPIN key:%s",keybuf);
     } else {
         assert(NULL);
     }
