@@ -37,6 +37,7 @@
 #define REDIS_LPOP 7
 #define REDIS_HSET 8
 #define REDIS_HGET 9
+#define REDIS_HGETALL 10
 
 #define MAX_LATENCY 5000
 #define DEFAULT_KEYSPACE 100000 /* 100k */
@@ -67,6 +68,7 @@ static struct config {
     int lpop_perc;
     int hset_perc;
     int hget_perc;
+    int hgetall_perc;
 
     int check;
     int rand;
@@ -377,13 +379,14 @@ static void usage(char *wrong) {
 "\n"
 "Type of operations (use percentages without trailing %%):\n"
 "\n"
-" set <percentage>    Percentage of SETs (default 50)\n"
-" del <percentage>    Percentage of DELs (default 0)\n"
-" lpush <percentage>  Percentage of LPUSHs (default 0)\n"
-" lpop <percentage>   Percentage of LPOPs (default 0)\n"
-" hset <percentage>   Percentage of HSETs (default 0)\n"
-" hget <percentage>   Percentage of HGETs (default 0)\n"
-" swapin <percentage> Percentage of DEBUG SWAPINs (default 0)\n"
+" set <percentage>     Percentage of SETs (default 50)\n"
+" del <percentage>     Percentage of DELs (default 0)\n"
+" lpush <percentage>   Percentage of LPUSHs (default 0)\n"
+" lpop <percentage>    Percentage of LPOPs (default 0)\n"
+" hset <percentage>    Percentage of HSETs (default 0)\n"
+" hget <percentage>    Percentage of HGETs (default 0)\n"
+" hgetall <percentage> Percentage of HGETs (default 0)\n"
+" swapin <percentage>  Percentage of DEBUG SWAPINs (default 0)\n"
 "\n"
 " All the free percantege (in order to reach 100%%) will be used for GETs\n"
 );
@@ -422,6 +425,9 @@ static void parseOptions(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i],"hget") && !lastarg) {
             config.hget_perc = atoi(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"hgetall") && !lastarg) {
+            config.hgetall_perc = atoi(argv[i+1]);
             i++;
         } else if (!strcmp(argv[i],"keepalive") && !lastarg) {
             config.keepalive = atoi(argv[i+1]);
@@ -538,6 +544,7 @@ int main(int argc, char **argv) {
     config.lpop_perc = 0;
     config.hset_perc = 0;
     config.hget_perc = 0;
+    config.hgetall_perc = 0;
     config.datasize_min = 1;
     config.datasize_max = 64;
     config.keyspace = DEFAULT_KEYSPACE; /* 100k */
@@ -576,6 +583,7 @@ int main(int argc, char **argv) {
         fillOpTab(&i,REDIS_LPOP,config.lpop_perc);
         fillOpTab(&i,REDIS_HSET,config.hset_perc);
         fillOpTab(&i,REDIS_HGET,config.hget_perc);
+        fillOpTab(&i,REDIS_HGETALL,config.hgetall_perc);
         fillOpTab(&i,REDIS_SWAPIN,config.swapin_perc);
     }
 
