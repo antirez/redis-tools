@@ -35,9 +35,12 @@
 #define REDIS_SWAPIN 4
 #define REDIS_LPUSH 6
 #define REDIS_LPOP 7
+#define REDIS_HSET 8
+#define REDIS_HGET 9
 
 #define MAX_LATENCY 5000
 #define DEFAULT_KEYSPACE 100000 /* 100k */
+#define DEFAULT_HASHKEYSPACE 1000 /* 1k */
 
 #define REDIS_NOTUSED(V) ((void) V)
 
@@ -52,12 +55,19 @@ static struct config {
 
     int datasize_min;
     int datasize_max;
+    unsigned char *databuf;
+
     int keyspace;
+    int hashkeyspace;
+
     int set_perc;
     int del_perc;
     int swapin_perc;
     int lpush_perc;
     int lpop_perc;
+    int hset_perc;
+    int hget_perc;
+
     int check;
     int rand;
     int longtail;
@@ -195,12 +205,17 @@ static void handleReply(redisAsyncContext *context, void *_reply, void *privdata
     if (reply == NULL && context->err) {
         fprintf(stderr,"Error: %s\n", context->errstr);
         exit(1);
+    } else {
+        assert(reply != NULL);
+        if (reply->type == REDIS_REPLY_ERROR) {
+            fprintf(stderr,"Error: %s\n", reply->str);
+            exit(1);
+        }
     }
 
     if (latency > MAX_LATENCY) latency = MAX_LATENCY;
     config.latency[latency]++;
 
-    assert(reply != NULL && reply->type != REDIS_REPLY_ERROR);
     if (config.check) checkDataIntegrity(c,reply);
     freeReplyObject(reply);
 
@@ -217,10 +232,34 @@ static void handleReply(redisAsyncContext *context, void *_reply, void *privdata
     }
 }
 
+static unsigned long randomData(long seed) {
+    unsigned long datalen;
+
+    /* We use the key number as seed of the PRNG, so we'll be able to check if
+     * a given key contains the right data later, without the use of additional
+     * memory. */
+    if (config.check) {
+        rc4rand_seed(seed);
+        datalen = rc4rand_between(config.datasize_min,config.datasize_max);
+        rc4rand_set(config.databuf,datalen);
+    } else {
+        datalen = randbetween(config.datasize_min,config.datasize_max);
+        if (config.rand) {
+            rc4rand_seed(seed);
+            rc4rand_set(config.databuf,datalen);
+        } else {
+            memset(config.databuf,'x',datalen);
+        }
+    }
+
+    return datalen;
+}
+
 static void issueRequest(client c) {
     int op = config.optab[random() % 100];
-    long key;
+    long key, hashkey;
     char keybuf[32];
+    unsigned long datalen;
 
     config.issued_requests++;
     if (config.issued_requests == config.num_requests) config.done = 1;
@@ -228,8 +267,10 @@ static void issueRequest(client c) {
     c->start = microseconds();
     if (config.longtail) {
         key = longtailprng(0,config.keyspace-1,config.longtail_order);
+        hashkey = longtailprng(0,config.hashkeyspace-1,config.longtail_order);
     } else {
         key = random() % config.keyspace;
+        hashkey = random() % config.hashkeyspace;
     }
 
     c->keyid = key;
@@ -239,54 +280,22 @@ static void issueRequest(client c) {
     if (op == REDIS_IDLE) {
         printf("idle!\n");
     } else if (op == REDIS_SET) {
-        unsigned char *data;
-        unsigned long datalen;
-        
-        if (config.check) {
-            rc4rand_seed(key);
-            datalen = rc4rand_between(config.datasize_min,config.datasize_max);
-        } else {
-            datalen = randbetween(config.datasize_min,config.datasize_max);
-        }
-
-        /* We use the key number as seed of the PRNG, so we'll be able to
-         * check if a given key contains the right data later, without the
-         * use of additional memory */
-        data = zmalloc(datalen);
-        if (config.check) {
-            rc4rand_set(data,datalen);
-        } else {
-            if (config.rand) {
-                rc4rand_seed(key);
-                rc4rand_set(data,datalen);
-            } else {
-                memset(data,'x',datalen);
-            }
-        }
-
-        redisAsyncCommand(c->context,handleReply,NULL,"SET key:%s %b",keybuf,data,datalen);
-        zfree(data);
+        datalen = randomData(key);
+        redisAsyncCommand(c->context,handleReply,NULL,"SET key:%s %b",keybuf,config.databuf,datalen);
     } else if (op == REDIS_GET) {
         redisAsyncCommand(c->context,handleReply,NULL,"GET key:%s",keybuf);
     } else if (op == REDIS_DEL) {
         redisAsyncCommand(c->context,handleReply,NULL,"DEL key:%s",keybuf);
     } else if (op == REDIS_LPUSH) {
-        unsigned char *data;
-        unsigned long datalen;
-        
-        datalen = randbetween(config.datasize_min,config.datasize_max);
-        data = zmalloc(datalen);
-        if (config.rand) {
-            rc4rand_seed(key);
-            rc4rand_set(data,datalen);
-        } else {
-            memset(data,'x',datalen);
-        }
-
-        redisAsyncCommand(c->context,handleReply,NULL,"LPUSH key:%s %b",keybuf,data,datalen);
-        zfree(data);
+        datalen = randomData(key);
+        redisAsyncCommand(c->context,handleReply,NULL,"LPUSH key:%s %b",keybuf,config.databuf,datalen);
     } else if (op == REDIS_LPOP) {
         redisAsyncCommand(c->context,handleReply,NULL,"LPOP key:%s",keybuf);
+    } else if (op == REDIS_HSET) {
+        datalen = randomData(key);
+        redisAsyncCommand(c->context,handleReply,NULL,"HSET key:%s key:%ld %b",keybuf,hashkey,config.databuf,datalen);
+    } else if (op == REDIS_HGET) {
+        redisAsyncCommand(c->context,handleReply,NULL,"HGET key:%s key:%ld",keybuf,hashkey);
     } else if (op == REDIS_SWAPIN) {
         redisAsyncCommand(c->context,handleReply,NULL,"DEBUG SWAPIN key:%s",keybuf);
     } else {
@@ -372,6 +381,8 @@ static void usage(char *wrong) {
 " del <percentage>    Percentage of DELs (default 0)\n"
 " lpush <percentage>  Percentage of LPUSHs (default 0)\n"
 " lpop <percentage>   Percentage of LPOPs (default 0)\n"
+" hset <percentage>   Percentage of HSETs (default 0)\n"
+" hget <percentage>   Percentage of HGETs (default 0)\n"
 " swapin <percentage> Percentage of DEBUG SWAPINs (default 0)\n"
 "\n"
 " All the free percantege (in order to reach 100%%) will be used for GETs\n"
@@ -406,6 +417,12 @@ static void parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i],"lpop") && !lastarg) {
             config.lpop_perc = atoi(argv[i+1]);
             i++;
+        } else if (!strcmp(argv[i],"hset") && !lastarg) {
+            config.hset_perc = atoi(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"hget") && !lastarg) {
+            config.hget_perc = atoi(argv[i+1]);
+            i++;
         } else if (!strcmp(argv[i],"keepalive") && !lastarg) {
             config.keepalive = atoi(argv[i+1]);
             i++;
@@ -426,6 +443,9 @@ static void parseOptions(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i],"keyspace") && !lastarg) {
             config.keyspace = atoi(argv[i+1]);
+            i++;
+        } else if (!strcmp(argv[i],"hashkeyspace") && !lastarg) {
+            config.hashkeyspace = atoi(argv[i+1]);
             i++;
         } else if (!strcmp(argv[i],"seed") && !lastarg) {
             config.prngseed = strtol(argv[i+1],NULL,10);
@@ -468,7 +488,8 @@ static void parseOptions(int argc, char **argv) {
     if (config.datasize_min > 1024*1024) config.datasize_min = 1024*1024;
     if (config.datasize_max < 1) config.datasize_max = 1;
     if (config.datasize_max > 1024*1024) config.datasize_max = 1024*1024;
-    if (config.keyspace < 0) config.keyspace = 0;
+    if (config.keyspace < 1) config.keyspace = DEFAULT_KEYSPACE;
+    if (config.hashkeyspace < 1) config.hashkeyspace = DEFAULT_HASHKEYSPACE;
 }
 
 static void ctrlc(int sig) {
@@ -515,9 +536,12 @@ int main(int argc, char **argv) {
     config.swapin_perc = 0;
     config.lpush_perc = 0;
     config.lpop_perc = 0;
+    config.hset_perc = 0;
+    config.hget_perc = 0;
     config.datasize_min = 1;
     config.datasize_max = 64;
     config.keyspace = DEFAULT_KEYSPACE; /* 100k */
+    config.hashkeyspace = DEFAULT_HASHKEYSPACE; /* 1k */
     config.check = 0;
     config.rand = 0;
     config.longtail = 0;
@@ -533,6 +557,7 @@ int main(int argc, char **argv) {
     config.hostport = 6379;
 
     parseOptions(argc,argv);
+    config.databuf = zmalloc(config.datasize_max);
 
     if (config.keepalive == 0) {
         printf("WARNING: keepalive disabled, you probably need 'echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse' for Linux and 'sudo sysctl -w net.inet.tcp.msl=1000' for Mac OS X in order to use a lot of clients/requests\n");
@@ -549,6 +574,8 @@ int main(int argc, char **argv) {
         fillOpTab(&i,REDIS_DEL,config.del_perc);
         fillOpTab(&i,REDIS_LPUSH,config.lpush_perc);
         fillOpTab(&i,REDIS_LPOP,config.lpop_perc);
+        fillOpTab(&i,REDIS_HSET,config.hset_perc);
+        fillOpTab(&i,REDIS_HGET,config.hget_perc);
         fillOpTab(&i,REDIS_SWAPIN,config.swapin_perc);
     }
 
