@@ -84,13 +84,6 @@ static struct config {
     unsigned char optab[100];
 } config;
 
-#define OPTAB_GET 0
-#define OPTAB_SET 1
-#define OPTAB_DEL 2
-#define OPTAB_SWAPIN 3
-#define OPTAB_LPUSH 4
-#define OPTAB_LPOP 5
-
 typedef struct _client {
     redisAsyncContext *context;
     int state;
@@ -237,9 +230,8 @@ static void handleReply(redisAsyncContext *context, void *_reply, void *privdata
 }
 
 static void issueRequest(client c) {
-    long r = random() % 100;
+    int op = config.optab[random() % 100];
     long key;
-    int op = config.optab[r];
     char keybuf[32];
 
     config.issued_requests++;
@@ -253,15 +245,15 @@ static void issueRequest(client c) {
     }
 
     c->keyid = key;
+    c->reqtype = op;
+
     snprintf(keybuf,sizeof(keybuf),"%ld",key);
-    if (config.idlemode) {
+    if (op == REDIS_IDLE) {
         printf("idle!\n");
-        c->reqtype = REDIS_IDLE;
-    } else if (op == OPTAB_SET) {
+    } else if (op == REDIS_SET) {
         unsigned char *data;
         unsigned long datalen;
         
-        c->reqtype = REDIS_SET;
         if (config.check) {
             rc4rand_seed(key);
             datalen = rc4rand_between(config.datasize_min,config.datasize_max);
@@ -286,18 +278,14 @@ static void issueRequest(client c) {
 
         redisAsyncCommand(c->context,handleReply,NULL,"SET key:%s %b",keybuf,data,datalen);
         zfree(data);
-    } else if (op == OPTAB_GET) {
-        c->reqtype = REDIS_GET;
+    } else if (op == REDIS_GET) {
         redisAsyncCommand(c->context,handleReply,NULL,"GET key:%s",keybuf);
-    } else if (op == OPTAB_DEL) {
-        c->reqtype = REDIS_DEL;
+    } else if (op == REDIS_DEL) {
         redisAsyncCommand(c->context,handleReply,NULL,"DEL key:%s",keybuf);
-    } else if (op == OPTAB_LPUSH) {
+    } else if (op == REDIS_LPUSH) {
         unsigned char *data;
         unsigned long datalen;
         
-        c->reqtype = REDIS_LPUSH;
-
         datalen = randbetween(config.datasize_min,config.datasize_max);
         data = zmalloc(datalen);
         if (config.rand) {
@@ -309,11 +297,9 @@ static void issueRequest(client c) {
 
         redisAsyncCommand(c->context,handleReply,NULL,"LPUSH key:%s %b",keybuf,data,datalen);
         zfree(data);
-    } else if (op == OPTAB_LPOP) {
-        c->reqtype = REDIS_LPOP;
+    } else if (op == REDIS_LPOP) {
         redisAsyncCommand(c->context,handleReply,NULL,"LPOP key:%s",keybuf);
-    } else if (op == OPTAB_SWAPIN) {
-        c->reqtype = REDIS_SWAPIN;
+    } else if (op == REDIS_SWAPIN) {
         redisAsyncCommand(c->context,handleReply,NULL,"DEBUG SWAPIN key:%s",keybuf);
     } else {
         assert(NULL);
@@ -523,7 +509,7 @@ static void fillOpTab(int *i, int op, int perc) {
 }
 
 int main(int argc, char **argv) {
-    int i;
+    int i = 0;
 
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
@@ -567,17 +553,17 @@ int main(int argc, char **argv) {
 
     if (config.idlemode) {
         printf("Creating %d idle connections and waiting forever (Ctrl+C when done)\n", config.num_clients);
+        memset(config.optab,REDIS_IDLE,100);
+    } else {
+        /* Setup the operation table. Start with a table with just GET
+         * operations and overwrite it with others as needed. */
+        memset(config.optab,REDIS_GET,100);
+        fillOpTab(&i,REDIS_SET,config.set_perc);
+        fillOpTab(&i,REDIS_DEL,config.del_perc);
+        fillOpTab(&i,REDIS_LPUSH,config.lpush_perc);
+        fillOpTab(&i,REDIS_LPOP,config.lpop_perc);
+        fillOpTab(&i,REDIS_SWAPIN,config.swapin_perc);
     }
-
-    /* Setup the operation table. Start with a table with just GETs operations
-     * and overwrite it with the other kind of ops as needed. */
-    memset(config.optab,OPTAB_GET,100);
-    i = 0;
-    fillOpTab(&i,OPTAB_SET,config.set_perc);
-    fillOpTab(&i,OPTAB_DEL,config.del_perc);
-    fillOpTab(&i,OPTAB_SWAPIN,config.swapin_perc);
-    fillOpTab(&i,OPTAB_LPUSH,config.lpush_perc);
-    fillOpTab(&i,OPTAB_LPOP,config.lpop_perc);
 
     signal(SIGINT,ctrlc);
     srandom(config.prngseed);
