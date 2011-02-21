@@ -15,7 +15,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
-#include <sys/time.h>
 #include <signal.h>
 #include <assert.h>
 #include <signal.h>
@@ -27,6 +26,7 @@
 #include "adlist.h"
 #include "zmalloc.h"
 #include "rc4rand.h"
+#include "utils.h"
 
 #define REDIS_IDLE 0
 #define REDIS_GET 1
@@ -95,17 +95,6 @@ typedef struct _client {
 /* Prototypes */
 static void issueRequest(client c);
 static void createMissingClients(void);
-
-/* Implementation */
-static long long mstime(void) {
-    struct timeval tv;
-    long long mst;
-
-    gettimeofday(&tv, NULL);
-    mst = ((long)tv.tv_sec)*1000;
-    mst += tv.tv_usec/1000;
-    return mst;
-}
 
 /* Return a pseudo random number between min and max both inclusive */
 static long randbetween(long min, long max) {
@@ -200,9 +189,8 @@ static void checkDataIntegrity(client c, redisReply *reply) {
 static void handleReply(redisAsyncContext *context, void *_reply, void *privdata) {
     REDIS_NOTUSED(privdata);
     redisReply *reply = (redisReply*)_reply;
-    long long latency;
     client c = (client)context->data;
-    latency = mstime() - c->start;
+    long long latency = (microseconds() - c->start) / 1000;
 
     if (reply == NULL && context->err) {
         fprintf(stderr,"Error: %s\n", context->errstr);
@@ -237,7 +225,7 @@ static void issueRequest(client c) {
     config.issued_requests++;
     if (config.issued_requests == config.num_requests) config.done = 1;
 
-    c->start = mstime();
+    c->start = microseconds();
     if (config.longtail) {
         key = longtailprng(0,config.keyspace-1,config.longtail_order);
     } else {
@@ -324,7 +312,7 @@ static void showLatencyReport(char *title) {
             if (config.latency[j]) {
                 seen += config.latency[j];
                 perc = ((float)seen*100)/config.issued_requests;
-                printf("%.2f%% <= %d milliseconds\n", perc, j);
+                printf("%6.2f%% < %d ms\n", perc, j+1);
             }
         }
         printf("%.2f requests per second\n\n", reqpersec);
@@ -335,12 +323,12 @@ static void showLatencyReport(char *title) {
 
 static void prepareForBenchmark(void) {
     memset(config.latency,0,sizeof(int)*(MAX_LATENCY+1));
-    config.start = mstime();
+    config.start = microseconds();
     config.issued_requests = 0;
 }
 
 static void endBenchmark(char *title) {
-    config.totlatency = mstime()-config.start;
+    config.totlatency = (microseconds()-config.start)/1000;
     showLatencyReport(title);
 }
 
@@ -540,7 +528,7 @@ int main(int argc, char **argv) {
     config.latency = NULL;
     config.latency = zmalloc(sizeof(int)*(MAX_LATENCY+1));
     config.ctrlc = 0;
-    config.prngseed = (unsigned int) (mstime()^getpid());
+    config.prngseed = (unsigned int) (microseconds()^getpid());
 
     config.hostip = "127.0.0.1";
     config.hostport = 6379;
