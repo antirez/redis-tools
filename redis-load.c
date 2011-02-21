@@ -281,25 +281,26 @@ static void issueRequest(client c) {
         printf("idle!\n");
     } else if (op == REDIS_SET) {
         datalen = randomData(key);
-        redisAsyncCommand(c->context,handleReply,NULL,"SET key:%ld %b",key,config.databuf,datalen);
+        redisAsyncCommand(c->context,handleReply,NULL,"SET string:%ld %b",key,config.databuf,datalen);
     } else if (op == REDIS_GET) {
-        redisAsyncCommand(c->context,handleReply,NULL,"GET key:%ld",key);
+        redisAsyncCommand(c->context,handleReply,NULL,"GET string:%ld",key);
     } else if (op == REDIS_DEL) {
-        redisAsyncCommand(c->context,handleReply,NULL,"DEL key:%ld",key);
+        redisAsyncCommand(c->context,handleReply,NULL,"DEL string:%ld list:%ld hash:%ld",key,key,key);
     } else if (op == REDIS_LPUSH) {
         datalen = randomData(key);
-        redisAsyncCommand(c->context,handleReply,NULL,"LPUSH key:%ld %b",key,config.databuf,datalen);
+        redisAsyncCommand(c->context,handleReply,NULL,"LPUSH list:%ld %b",key,config.databuf,datalen);
     } else if (op == REDIS_LPOP) {
-        redisAsyncCommand(c->context,handleReply,NULL,"LPOP key:%ld",key);
+        redisAsyncCommand(c->context,handleReply,NULL,"LPOP list:%ld",key);
     } else if (op == REDIS_HSET) {
         datalen = randomData(key);
-        redisAsyncCommand(c->context,handleReply,NULL,"HSET key:%ld key:%ld %b",key,hashkey,config.databuf,datalen);
+        redisAsyncCommand(c->context,handleReply,NULL,"HSET hash:%ld key:%ld %b",key,hashkey,config.databuf,datalen);
     } else if (op == REDIS_HGET) {
-        redisAsyncCommand(c->context,handleReply,NULL,"HGET key:%ld key:%ld",key,hashkey);
+        redisAsyncCommand(c->context,handleReply,NULL,"HGET hash:%ld key:%ld",key,hashkey);
     } else if (op == REDIS_HGETALL) {
-        redisAsyncCommand(c->context,handleReply,NULL,"HGETALL key:%ld",key);
+        redisAsyncCommand(c->context,handleReply,NULL,"HGETALL hash:%ld",key);
     } else if (op == REDIS_SWAPIN) {
-        redisAsyncCommand(c->context,handleReply,NULL,"DEBUG SWAPIN key:%ld",key);
+        /* Only accepts a single argument, so for now only works with string keys. */
+        redisAsyncCommand(c->context,handleReply,NULL,"DEBUG SWAPIN string:%ld",key);
     } else {
         assert(NULL);
     }
