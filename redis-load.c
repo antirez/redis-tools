@@ -294,18 +294,18 @@ static void issueRequest(client c) {
     }
 }
 
-static void showLatencyReport(char *title) {
+static void showLatencyReport(void) {
     int j, seen = 0;
     float perc, reqpersec;
 
     reqpersec = (float)config.issued_requests/((float)config.totlatency/1000);
     if (!config.quiet) {
-        printf("====== %s ======\n", title);
-        printf("  %d requests completed in %.2f seconds\n", config.issued_requests,
+        printf("====== Report ======\n");
+        printf("  %d requests in %.3f seconds\n", config.issued_requests,
             (float)config.totlatency/1000);
+        printf("  %.2f requests per second\n", reqpersec);
         printf("  %d parallel clients\n", config.num_clients);
-        printf("  %d min bytes payload\n", config.datasize_min);
-        printf("  %d max bytes payload\n", config.datasize_max);
+        printf("  payload: %d..%d bytes\n", config.datasize_min, config.datasize_max);
         printf("  keep alive: %d\n", config.keepalive);
         printf("\n");
         for (j = 0; j <= MAX_LATENCY; j++) {
@@ -315,9 +315,8 @@ static void showLatencyReport(char *title) {
                 printf("%6.2f%% < %d ms\n", perc, j+1);
             }
         }
-        printf("%.2f requests per second\n\n", reqpersec);
     } else {
-        printf("%s: %.2f requests per second\n", title, reqpersec);
+        printf("%.2f requests per second\n", reqpersec);
     }
 }
 
@@ -327,9 +326,9 @@ static void prepareForBenchmark(void) {
     config.issued_requests = 0;
 }
 
-static void endBenchmark(char *title) {
+static void endBenchmark(void) {
     config.totlatency = (microseconds()-config.start)/1000;
-    showLatencyReport(title);
+    showLatencyReport();
 }
 
 static void usage(char *wrong) {
@@ -560,8 +559,7 @@ int main(int argc, char **argv) {
         prepareForBenchmark();
         createMissingClients();
         aeMain(config.el);
-        endBenchmark("Report");
-        printf("\n");
+        endBenchmark();
     } while(config.loop);
 
     return 0;
