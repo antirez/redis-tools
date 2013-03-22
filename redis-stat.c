@@ -164,7 +164,7 @@ static void overview() {
 
         /* Childs */
         aux = getLongInfoField(reply->str,"bgsave_in_progress");
-        aux |= getLongInfoField(reply->str,"bgrewriteaof_in_progress") << 1;
+        aux |= getLongInfoField(reply->str,"aof_rewrite_in_progress") << 1;
         switch(aux) {
         case 0: break;
         case 1:
