@@ -162,7 +162,7 @@ static void overview() {
         sprintf(buf,"%ld",aux);
         printf(" %-12s",buf);
 
-        /* Childs */
+        /* Children */
         aux = getLongInfoField(reply->str,"bgsave_in_progress");
         aux |= getLongInfoField(reply->str,"aof_rewrite_in_progress") << 1;
         switch(aux) {
